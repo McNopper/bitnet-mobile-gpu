@@ -1,0 +1,32 @@
+# Starting gate for C++ code. Curated, not exhaustive: the goal is a quiet
+# baseline that stays quiet. Add categories as the code matures; never
+# suppress findings at call sites without a comment stating why.
+Checks: >
+  -*,
+  bugprone-*,
+  performance-*,
+  modernize-*,
+  readability-*,
+  -bugprone-easily-swappable-parameters,
+  -modernize-use-trailing-return-type,
+  -readability-implicit-bool-conversion,
+  -readability-identifier-length,
+  -readability-math-missing-parentheses,
+  readability-magic-numbers{IgnoredIntegerValues: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 24, 32, 48, 63, 64, 100, 127, 128, 255, 256, 511, 512, 1000, 1023, 1024, 2048, 4095, 4096, 1000000]},
+  -modernize-use-std-print
+
+WarningsAsErrors: '*'
+HeaderFilterRegex: 'poc/.*'
+
+# Suppression rationale (documented, not silent):
+# - readability-math-missing-parentheses: fires on standard index arithmetic
+#   (size_t(i) * n + c) throughout the numeric kernels; '*' > '+' precedence
+#   is unambiguous and the format is idiomatic for tensor indexing.
+# - readability-magic-numbers: the domain's constants ARE meaningful numbers
+#   (32 weights/word = kWeightsPerWord for ABI-relevant uses, 64/16 thread
+#   tile sizes = kernel contract mirrors of the Slang [numthreads] values;
+#   13-20 small-integer literals, added 2026-11-17).
+# - modernize-use-std-print: printf-family stays - it is the llama.cpp-facing
+#   style, keeps the CSV output byte-stable across toolchains, and NDK
+#   libc++ <print> support varies by NDK version.
+

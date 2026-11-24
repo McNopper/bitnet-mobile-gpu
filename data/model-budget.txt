@@ -1,0 +1,34 @@
+# model budget (sizes in decimal MB/GB, GiB where stated)
+parameters total      : 2,412,820,480
+  BitLinear (ternary) : 2,084,044,800
+  embedding = head    : 328,335,360
+  norm weights        : 440,320
+layers                : 30
+layer-0 projections (out x in):
+  down_proj  2560 x 6912
+  gate_proj  6912 x 2560
+  k_proj     640 x 2560
+  o_proj     2560 x 2560
+  q_proj     2560 x 2560
+  up_proj    6912 x 2560
+  v_proj     640 x 2560
+whole model at 16 bit : 4,825,640,960 B = 4.83 GB = 4.49 GiB
+BitLinear storage:
+  plane-2bit (PoC)  2.0000 bpw  521,011,200 B = 0.521 GB
+  TQ2_0             2.0625 bpw  537,292,800 B = 0.537 GB
+  TQ1_0             1.6875 bpw  439,603,200 B = 0.440 GB
+embedding / output head storage:
+  F16               16.0000 bpw  656,670,720 B = 0.657 GB
+  Q6_K              6.5625 bpw  269,337,600 B = 0.269 GB
+  Q4_K              4.5000 bpw  184,688,640 B = 0.185 GB
+KV cache (f16)        : 76,800 B per token
+  context 512         0.039 GB
+  context 2048        0.157 GB
+  context 4096        0.315 GB
+decode weight traffic per generated token (layers + head, each read once):
+  TQ2_0 + F16   head  1.194 GB  | A9-CPU @ 3.91 GB/s: <= 3.27 tok/s  | A9-GPU @ 2.965 GB/s: <= 2.48 tok/s
+  TQ2_0 + Q6_K  head  0.807 GB  | A9-CPU @ 3.91 GB/s: <= 4.85 tok/s  | A9-GPU @ 2.965 GB/s: <= 3.68 tok/s
+  TQ2_0 + Q4_K  head  0.722 GB  | A9-CPU @ 3.91 GB/s: <= 5.42 tok/s  | A9-GPU @ 2.965 GB/s: <= 4.11 tok/s
+  TQ1_0 + F16   head  1.096 GB  | A9-CPU @ 3.91 GB/s: <= 3.57 tok/s  | A9-GPU @ 2.965 GB/s: <= 2.70 tok/s
+  TQ1_0 + Q6_K  head  0.709 GB  | A9-CPU @ 3.91 GB/s: <= 5.52 tok/s  | A9-GPU @ 2.965 GB/s: <= 4.18 tok/s
+  TQ1_0 + Q4_K  head  0.624 GB  | A9-CPU @ 3.91 GB/s: <= 6.26 tok/s  | A9-GPU @ 2.965 GB/s: <= 4.75 tok/s

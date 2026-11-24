@@ -1,0 +1,38 @@
+# Build outputs
+build/
+build-*/
+out/
+*.o
+*.obj
+*.spv.tmp
+
+# IDE
+.vs/
+.vscode/
+.idea/
+*.user
+
+# Android/NDK intermediates
+.cxx/
+.gradle/
+
+# OS
+Thumbs.db
+.DS_Store
+
+# Downloaded third-party binaries
+third_party/
+
+# Model weights (multi-GB; downloaded by tools/export_weights.py)
+models/*
+!models/README.md
+
+# Quarto render cache
+.quarto/
+
+# Tool caches (Python byte code, ruff, mypy, pytest)
+__pycache__/
+*.py[cod]
+.ruff_cache/
+.mypy_cache/
+.pytest_cache/

@@ -1,0 +1,36 @@
+# Python lane config: Ruff lint+format, mypy types, pytest tests. Python is
+# the tooling language beside C++: the export of the real-weight sample of
+# the test harness. The proof of concept itself is C++ and Slang.
+
+[project]
+name = "bitnet-tools"
+version = "0.1.0"
+description = "Tooling scripts for the BitNet PoC"
+requires-python = ">=3.12"
+dependencies = [
+    "numpy",
+    "huggingface_hub",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+src = ["tools"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "SIM", "RUF"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+files = ["tools"]
+mypy_path = "tools"
+explicit_package_bases = true
+
+[[tool.mypy.overrides]]
+module = ["safetensors.*", "huggingface_hub.*"]
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+testpaths = ["tools/tests"]
+pythonpath = ["tools"]

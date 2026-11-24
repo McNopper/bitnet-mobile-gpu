@@ -1,0 +1,10 @@
+# Markdown lint policy.
+#
+# MD013 (line length): technical prose is wrapped at 100. Tables, code blocks
+# and headings are exempt — table rows, commands and long identifiers cannot
+# be wrapped without breaking them.
+MD013:
+  line_length: 100
+  code_blocks: false
+  tables: false
+  headings: false
