@@ -1,6 +1,8 @@
 #pragma once
 // BITNET1 container (real-model weights, Path A):
 //   magic "TETH" + u32 version (=1) + u32 n + u32 k
+//   (legacy four-byte wire magic retained for byte-identical containers;
+//   the format name is BITNET1 and this is not an identifier rename)
 //   + n*k int8 ternary weights (row-major)
 //   + n fp32 gamma values (absmean scales)
 // Written by tools/export_weights.py (Python) and bitnet::write_bitnet1

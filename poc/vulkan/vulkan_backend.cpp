@@ -201,11 +201,11 @@ std::string spv_directory() {
 // Returns the LocalSize.x of the first OpExecutionMode LocalSize instruction
 // in the module, or 0 when none is present. SPIR-V words: opcode = w & 0xFFFF,
 // word count = w >> 16; OpExecutionMode (opcode 16) operands are
-// [entry point, execution mode, literals...]; LocalSize is execution mode 6.
+// [entry point, execution mode, literals...]; LocalSize is execution mode 17.
 // SPIR-V word-stream constants for the LocalSize scan (OpExecutionMode).
 constexpr uint32_t kSpirvHeaderWords = 5U; // magic, version, gen, bound, schema
 constexpr uint32_t kSpirvOpExecutionMode = 16U;
-constexpr uint32_t kSpirvExecModeLocalSize = 6U;
+constexpr uint32_t kSpirvExecModeLocalSize = 17U;
 constexpr uint32_t kSpirvLocalSizeXIndex = 3U;  // first size literal after the mode
 constexpr uint32_t kSpirvMinExecModeWords = 5U; // opcode, target, mode, x, y
 
@@ -215,8 +215,8 @@ uint32_t local_size_x_of(const std::vector<uint32_t>& code) {
         const uint32_t insn = code[i];
         const uint32_t opcode = insn & 0xFFFFU;
         const size_t count = insn >> 16;
-        if (count == 0U) {
-            break; // malformed - do not loop forever
+        if (count == 0U || count > code.size() - i) {
+            break; // malformed - do not loop forever or read past the module
         }
         if (opcode == kSpirvOpExecutionMode && count >= kSpirvMinExecModeWords &&
             code[i + 2] == kSpirvExecModeLocalSize) {

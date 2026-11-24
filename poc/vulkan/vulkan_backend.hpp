@@ -121,7 +121,7 @@ std::string spv_directory();
 // Returns the LocalSize.x of the first OpExecutionMode LocalSize instruction
 // in the module, or 0 when none is present. SPIR-V words: opcode = w & 0xFFFF,
 // word count = w >> 16; OpExecutionMode (opcode 16) operands are
-// [entry point, execution mode, literals...]; LocalSize is execution mode 6.
+// [entry point, execution mode, literals...]; LocalSize is execution mode 17.
 uint32_t local_size_x_of(const std::vector<uint32_t>& code);
 
 // Reads a whole SPIR-V module; throws naming the full attempted path when the
@@ -179,7 +179,21 @@ class VulkanBuffer final : public IBuffer {
     VulkanBuffer(const VulkanBuffer&) = delete;
     VulkanBuffer& operator=(const VulkanBuffer&) = delete;
 
-    void* mapped() override { return mapped_; }
+    void* mapped() override {
+        // A fence does not invalidate the host cache of non-coherent memory.
+        // Invalidate before every host access; writes are flushed before the
+        // next submit, while reads after a dispatch see the device's results.
+        if (mapped_ != nullptr && !host_coherent_) {
+            const VkMappedMemoryRange range{.sType = VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE,
+                                            .pNext = nullptr,
+                                            .memory = memory_,
+                                            .offset = 0,
+                                            .size = VK_WHOLE_SIZE};
+            require_vk(vkInvalidateMappedMemoryRanges(device_, 1, &range),
+                       "vkInvalidateMappedMemoryRanges");
+        }
+        return mapped_;
+    }
     [[nodiscard]] uint64_t size() const override { return bytes_; }
 
     [[nodiscard]] VkBuffer handle() const { return buffer_; }
@@ -359,9 +373,9 @@ class VulkanBackend final : public IComputeBackend {
     bool has_16bit_storage_ = false;
     bool has_arm_shader_core_properties_ = false;
     bool has_qcom_image_processing_ = false;
-    // Core feature bit (VkPhysicalDeviceVulkan13Features.shaderIntegerDotProduct).
-    // Authoritative since Vulkan 1.3; the extension above stays enabled only
-    // for pre-1.3 drivers.
+    // Queried feature bit from VkPhysicalDeviceVulkan13Features (core 1.3)
+    // or VkPhysicalDeviceShaderIntegerDotProductFeaturesKHR (extension).
+    // Extension presence alone never sets this flag.
     bool dot_product_core_ = false;
     bool dot_packed_signed_accelerated_ = false;
     bool dot_8bit_signed_accelerated_ = false;

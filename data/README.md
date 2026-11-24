@@ -2,7 +2,7 @@
 
 | File | What it is |
 | --- | --- |
-| `golden_vector.txt` | **sample input and expected output** of the test harness: a hand-computed known-answer vector every kernel is checked against |
+| `golden_vector.txt` | **sample input and expected output** of the test harness: a hand-computed known-answer vector every applicable core kernel is checked against |
 | `model-budget.txt` | parameter, storage and bytes-per-token budget of the model |
 | `README.md` | this file: how validation works against real model weights |
 
@@ -29,7 +29,7 @@ random tensors.
    <https://github.com/microsoft/BitNet/tree/0b341e582afbf9e1011f24744b554c96a3477eb5/gpu>);
    the mobile GPU paths in llama.cpp itself are Vulkan and Metal.
 3. **Reference quantizers** (Hugging Face `integrations/bitnet.py`):
-   weights `scale = 1/mean(|W|)` over the whole tensor,
+   weights `scale = 1/clamp(mean(|W|), min=1e-5)` over the whole tensor,
    `round().clamp(-1, 1)`; activations `scale = 127/max(|x|)` per token
    vector, `round().clamp(-128, 127)`, `torch.round` (half to even).
 
@@ -37,7 +37,8 @@ random tensors.
 
 `tools/export_weights.py` reads one weight matrix from the local
 safetensors file, ternarizes it exactly like the reference quantizer
-(γ = mean(|W|) over the WHOLE tensor, q = clip(round(W/γ), -1, 1)) and
+(γ = max(mean(|W|), 1e-5) over the WHOLE tensor,
+q = clip(round(W/γ), -1, 1)) and
 writes a `BITNET1` container (magic, n, k, int8 ternary weights, fp32 γ
 stored as n equal per-row floats: the container has one scale slot per
 row).
@@ -55,8 +56,8 @@ row).
 `poc_tests --tensors <file>` then runs two tests on these weights:
 
 1. **Integer kernel test** - shape m = 8 × 2560 × 6912 with seeded int8
-   activations through every core kernel; GPU output must equal the CPU
-   oracle exactly.
+   activations through every applicable core kernel; GPU output must equal
+   the CPU oracle exactly.
 2. **BitLinear forward test** (`[bitlinear]`) - float activations in,
    float outputs out: per-token absmax quantization with the reference
    formula (127/max|x| with the 1e-5 floor, round half to even, clamp to

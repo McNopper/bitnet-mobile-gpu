@@ -86,7 +86,8 @@ struct PackedTernary {
     static PackedTernary pack(const int8_t* w, uint32_t n, uint32_t k);
     // Test helper: recover {-1,0,+1} values incl. padding = 0.
     std::vector<int8_t> unpack() const;
-    uint64_t bytes() const { return uint64_t(rows) * 2 * kwords * sizeof(uint32_t); }
+    // Actual storage size, including interleaved-16 tail-row padding.
+    uint64_t bytes() const { return uint64_t(bits.size()) * sizeof(uint32_t); }
 };
 
 // Interleaved-16 layout (alternate buffer, not a change to the default
@@ -116,11 +117,11 @@ struct KernelParams {
     uint32_t m;      // activation rows
     uint32_t n;      // weight rows (outputs)
     uint32_t kwords; // plane kernels (v1-v4): ceil(K / 32); dot kernels
-                     // (v5): ceil(K / 16) - each kernel family reads its own
+                     // (v5): ceil(K / 4) - each kernel family reads its own
                      // layout definition from this header
-    uint32_t mode;   // 0 = ternary, 1 = binary (reserved; v1 kernels always
-                     // read both planes, binary inputs simply carry a zero
-                     // second plane)
+    uint32_t mode;   // family-specific: K-split slice width, coopmat padded M,
+                     // image width; otherwise 0 (both planes are always read,
+                     // including binary inputs whose second plane is zero)
 };
 static_assert(sizeof(KernelParams) == 16, "shader layout contract");
 //
@@ -228,7 +229,8 @@ struct PackedActivationsV6 {
 // are the ternary {-1,0,+1} values verbatim; activations the int8 values
 // verbatim. The kernel's KernelParams.kwords carries paddedK (row stride).
 // transposeActs=true stores the ACTIVATIONS transposed (K-major:
-// paddedK rows x paddedM columns): the kernel loads A ColumnMajor.
+// paddedK rows x paddedM columns): staging transposes them on read, then the
+// kernel loads A RowMajor from workgroup-shared memory.
 struct PackedInt8MatPair {
     uint32_t paddedM = 0;
     uint32_t paddedN = 0;

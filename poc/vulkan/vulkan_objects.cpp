@@ -74,8 +74,7 @@ void VulkanBackend::create_device_objects() {
     // Desktop NVIDIA accepts both routes; we use one path everywhere.
     VkPhysicalDeviceShaderIntegerDotProductFeaturesKHR dot_features{};
     dot_features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_INTEGER_DOT_PRODUCT_FEATURES_KHR;
-    dot_features.shaderIntegerDotProduct =
-        (dot_product_core_ || has_dot_product_ext_) ? VK_TRUE : VK_FALSE;
+    dot_features.shaderIntegerDotProduct = dot_product_core_ ? VK_TRUE : VK_FALSE;
     // Cooperative-matrix lane enablement (least privilege): the feature
     // structs are chained ONLY when the enumerated shape matched AND the
     // SPIR-V's core-1.2 feature dependencies are supported. The core-1.2
@@ -126,7 +125,7 @@ void VulkanBackend::create_device_objects() {
     features2_enable.pNext = &dot_features;
     features2_enable.features = {}; // no classic features required (v1)
 
-    const bool use_dot = dot_product_core_ || has_dot_product_ext_;
+    const bool use_dot = dot_product_core_;
     const bool use_features2 = use_dot || has_subgroup_size_control_ || use_coop_mat;
     if (use_dot && has_dot_product_ext_) {
         extensions.push_back(VK_KHR_SHADER_INTEGER_DOT_PRODUCT_EXTENSION_NAME);

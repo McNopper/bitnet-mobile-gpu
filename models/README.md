@@ -35,7 +35,7 @@ different destination. Requires Python 3.12+ with `numpy` and
 build\windows\poc_tests.exe --spv-dir build\windows\spv --tensors models\real_weights.bitnet1
 
 # Android device, after pwsh scripts/build-android.ps1
-pwsh scripts/run-on-device.ps1 -Tensors models/real_weights.bitnet1
+pwsh scripts/run-on-device.ps1 -Serial <adb serial> -Tensors models/real_weights.bitnet1
 ```
 
 The container feeds the real-weight lanes of the harness: one layer of the

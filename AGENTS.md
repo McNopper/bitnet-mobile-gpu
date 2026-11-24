@@ -1,7 +1,7 @@
 # AGENTS.md — set up, test and reproduce
 
-Instructions for an agent working in this delivery
-folder. Everything runs from the folder root; every expectation below is
+Instructions for an agent working in this repository.
+Everything runs from the repository root; every expectation below is
 the observed output of these exact commands. Human-oriented walkthrough:
 [README.md](README.md). Plan and evidence:
 [Technical_Plan.pdf](Technical_Plan.pdf).
@@ -14,6 +14,7 @@ the observed output of these exact commands. Human-oriented walkthrough:
 | C++23 toolchain | MSVC (Windows host) or Android NDK r27 (device lane) |
 | Vulkan SDK | provides `slangc`; set `VULKAN_SDK` or edit the hint in `CMakeLists.txt` |
 | Python | 3.12+ with `numpy` and `huggingface_hub` (real-weight lane only) |
+| Quality-gate tools | markdownlint-cli2 (Node.js), ruff, mypy, pytest, PSScriptAnalyzer, clang-tidy, cppcheck, clang-format on PATH |
 | TinyTeX (`pdflatex`, `chktex`) | only to lint and rebuild the report (`python tools/build_report.py`) |
 | adb | only for the device lane (`run-on-device.ps1`) |
 
@@ -43,7 +44,7 @@ Prove the check can fail (once per fresh copy):
 ```powershell
 Rename-Item data\golden_vector.txt golden_vector.txt.away
 build\windows\poc_tests.exe --spv-dir build\windows\spv   # expect FAIL, exit 1
-Rename-Item golden_vector.txt.away data\golden_vector.txt
+Rename-Item data\golden_vector.txt.away golden_vector.txt
 ```
 
 ## 3. Quality gate
@@ -63,9 +64,10 @@ build\windows\poc_bench.exe --spv-dir build\windows\spv
 build\windows\poc_bench.exe --spv-dir build\windows\spv --system
 ```
 
-Expect 39 matrix rows with `NOT TIMED=0`; `--system` reports
-`verified_sites=3` and fires its own negative control
-(`half_grid_rejected=1`). A row exists only if the oracle verified it.
+Expect 39 matrix rows and no `NOT TIMED` lines; `--system` reports
+`verified_sites=7` for decode and prefill and `verified_sites=1` for the
+head, and fires its own negative control (`half_grid_rejected=1`). A row
+exists only if the oracle verified it.
 
 ## 5. Real-weight lane (optional)
 

@@ -242,8 +242,8 @@ bitnet_compile_kernels_for("mali-g52" "Mali-G52" 64 16 32 4 64 16 256 8 4 2 64 "
 #   gemm_dot_tiled lose the device: one submission exceeds about 2 s).
 bitnet_compile_kernels_for("adreno740" "Adreno (TM) 740" 128 128 128 4 32 8 128 1 4 2 64 "gemv_bitplane_ksplit_il" "gemm_bitplane_naive")
 
-# Tuning-sweep profiles (NOT auto-selected; used by bench sweeps via an
-# explicit --spv-dir). Constraint set for Mali-G57: TILE_THREADS = TILE_M *
+# Tuning-sweep profiles (NOT auto-selected; select with poc_bench --profile
+# <name> and the usual --spv-dir root). Constraint set for Mali-G57: TILE_THREADS = TILE_M *
 # TILE_N <= 512, shared storage = (TILE_N*2 + TILE_M*8) * CHUNK * 4 B <= 32 KB.
 # Sweep profiles carry no champions ("" - never auto-selected).
 bitnet_compile_kernels_for("sw-mali-tn64-c32" "" 128 128 128 4 64 32 256 1 4 2 64 "" "")

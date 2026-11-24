@@ -183,8 +183,8 @@ gemv_bitplane_rowserial(uint3 tid : SV_DispatchThreadID) {
 
 // ---- gemv_bitplane_ksplit: K-split slices + InterlockedAdd ----
 // (the host MUST zero the output buffer first: accumulation contract.
-// The grid stays small for very wide outputs: the decode champion on
-// Adreno 740, slower than the cooperative kernels on Mali.)
+// The grid stays small for very wide outputs; the interleaved-16 variant
+// below is the Adreno 740 decode champion.)
 
 static int dotRowSlice(int rowN, int begin, int end) {
     int accU = 0;

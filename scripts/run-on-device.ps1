@@ -4,10 +4,10 @@
 # Push the Android PoC binaries + SPIR-V kernels to the device over adb and
 # run them, forwarding stdout. Needs build/android/ artifacts from
 # scripts/build-android.ps1.
-# Usage: pwsh scripts/run-on-device.ps1 [-Serial <adb-serial>] [-Bench] [-AppArgs '<flags>']
+# Usage: pwsh scripts/run-on-device.ps1 -Serial <adb-serial> [-Bench] [-AppArgs '<flags>']
 
 param(
-  [string]$Serial = 'A7L0005200600915',
+  [string]$Serial = '',
   [string]$AppArgs = '',
   [switch]$Bench,
   [string]$Tensors = '',
@@ -29,6 +29,16 @@ $deviceDir = '/data/local/tmp/bitnet'
 $deviceSpvDir = "$deviceDir/spv"
 
 if (-not (Test-Path $adb)) { Write-Output "adb not found at $adb"; exit 1 }
+if ($Serial -eq '') { Write-Output 'Serial is required: pass -Serial <adb serial> (see adb devices)'; exit 2 }
+
+# Native adb failures do not trigger PowerShell's ErrorActionPreference.
+# Check every state-changing call so stale files on the device cannot mask
+# a failed mkdir/push/chmod. The final device-state query stays best-effort.
+function Invoke-Adb {
+  param([Parameter(Mandatory = $true)][string[]]$AdbArgs)
+  & $script:adb -s $script:Serial @AdbArgs
+  if ($LASTEXITCODE -ne 0) { Write-Output "FAIL adb $($AdbArgs[0]) (exit $LASTEXITCODE)"; exit $LASTEXITCODE }
+}
 
 $exe = 'poc_tests'
 $hostBin = Join-Path $repo 'build/android/poc_tests'
@@ -57,10 +67,10 @@ if (-not $spvFiles) {
 }
 
 Write-Output '=== mkdir'
-& $adb -s $Serial shell mkdir -p $deviceSpvDir
+Invoke-Adb -AdbArgs @('shell', 'mkdir', '-p', $deviceSpvDir)
 
 Write-Output '=== push binary'
-& $adb -s $Serial push $hostBin "$deviceDir/$exe"
+Invoke-Adb -AdbArgs @('push', $hostBin, "$deviceDir/$exe")
 
 Write-Output '=== push kernels (recursive, all profiles)'
 foreach ($f in $spvFiles) {
@@ -69,12 +79,12 @@ foreach ($f in $spvFiles) {
   # remote shell consumes as escapes (turning /data/local/... into datalocal...).
   $relParent = $rel -replace '/[^/]+$', ''
   $parent = "$deviceSpvDir/$relParent"
-  & $adb -s $Serial shell mkdir -p $parent
-  & $adb -s $Serial push $f.FullName "$deviceSpvDir/$rel"
+  Invoke-Adb -AdbArgs @('shell', 'mkdir', '-p', $parent)
+  Invoke-Adb -AdbArgs @('push', $f.FullName, "$deviceSpvDir/$rel")
 }
 
 Write-Output '=== chmod'
-& $adb -s $Serial shell chmod 755 "$deviceDir/$exe"
+Invoke-Adb -AdbArgs @('shell', 'chmod', '755', "$deviceDir/$exe")
 
 # Validation gate: push the Khronos layer and point the Vulkan loader at it
 # via VK_LAYER_PATH when present; without it we continue unvalidated and
@@ -84,9 +94,9 @@ $layerJson = Join-Path $repo 'third_party/vulkan-validation/arm64-v8a/VkLayer_kh
 $envPrefix = ''
 if ($Validation -and (Test-Path $layerLocal) -and (Test-Path $layerJson)) {
   Write-Output '=== push validation layer'
-  & $adb -s $Serial shell mkdir -p "$deviceDir/layers"
-  & $adb -s $Serial push $layerLocal "$deviceDir/layers/"
-  & $adb -s $Serial push $layerJson "$deviceDir/layers/"
+  Invoke-Adb -AdbArgs @('shell', 'mkdir', '-p', "$deviceDir/layers")
+  Invoke-Adb -AdbArgs @('push', $layerLocal, "$deviceDir/layers/")
+  Invoke-Adb -AdbArgs @('push', $layerJson, "$deviceDir/layers/")
   # Khronos-loader recipe: VK_LAYER_PATH points the loader at the manifest.
   # We deliberately do NOT use `setprop debug.vulkan.layers` (the global
   # property recipe for native executables): on this BSP loader ANY value of
@@ -103,7 +113,7 @@ else {
 $tensorsArg = ''
 if ($Tensors -ne '') {
   if (-not (Test-Path $Tensors)) { Write-Output "tensors file not found: $Tensors"; exit 1 }
-  & $adb -s $Serial push $Tensors "$deviceDir/real_weights.bitnet1"
+  Invoke-Adb -AdbArgs @('push', $Tensors, "$deviceDir/real_weights.bitnet1")
   $tensorsArg = '--tensors /data/local/tmp/bitnet/real_weights.bitnet1'
 }
 
@@ -113,7 +123,7 @@ $goldenArg = ''
 if (-not $Bench) {
   $goldenLocal = Join-Path $repo 'data/golden_vector.txt'
   if (Test-Path $goldenLocal) {
-    & $adb -s $Serial push $goldenLocal "$deviceDir/golden_vector.txt" | Out-Null
+    Invoke-Adb -AdbArgs @('push', $goldenLocal, "$deviceDir/golden_vector.txt") | Out-Null
     $goldenArg = '--golden /data/local/tmp/bitnet/golden_vector.txt'
   } else {
     Write-Output 'golden_vector.txt not found in data/ - golden test will report it missing'

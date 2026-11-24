@@ -13,10 +13,12 @@
 
 #include "backend/backend.hpp"
 #include "backend/caps_conformance.hpp"
+#include "backend/kernel_threads.h"
 #include "common/bitnet1.hpp"
 #include "common/format.hpp"
 #include "common/reference.hpp"
 #include "common/tensor_gen.hpp"
+#include "vulkan/vulkan_backend.hpp"
 
 #include <algorithm>
 #include <array>
@@ -212,6 +214,8 @@ void test_interleaved16_roundtrip() {
     const auto interleaved = bitnet::repack_interleaved16(packed);
     const auto back = bitnet::unpack_interleaved16(interleaved);
     CHECK(back == w);
+    // Buffer allocation must include the tail block's padding rows.
+    CHECK(interleaved.bytes() == interleaved.bits.size() * sizeof(uint32_t));
 }
 
 void test_v6_units_for() {
@@ -359,6 +363,44 @@ void test_conformance_dispatch_fail_closed() {
     CHECK(all_known);
 }
 
+void test_spirv_local_size() {
+    // OpExecutionMode (opcode 16), word count 6, entry point 1,
+    // LocalSize (execution mode 17), dimensions 256 x 1 x 1.
+    const std::vector<uint32_t> code{0x07230203U, 0x00010000U, 0U,   0U, 0U, (6U << 16) | 16U,
+                                     1U,          17U,         256U, 1U, 1U};
+    CHECK(bitnet::vulkan::local_size_x_of(code) == 256U);
+    // A truncated instruction must be rejected without reading past the words.
+    const std::vector<uint32_t> truncated{0x07230203U, 0x00010000U,      0U, 0U,
+                                          0U,          (6U << 16) | 16U, 1U};
+    CHECK(bitnet::vulkan::local_size_x_of(truncated) == 0U);
+}
+
+void test_expected_local_size_variants() {
+    const bitnet::GpuProfile* gpu = bitnet::gpu_profile_for_device("no such device");
+    CHECK(bitnet::expected_local_size("gemv_dot_rowcoop_emulated", *gpu) == gpu->gemv_dot_threads);
+    CHECK(bitnet::expected_local_size("gemm_dot_tiled_emulated", *gpu) == gpu->gemm_tile_threads);
+    CHECK(bitnet::expected_local_size("gemm_bitplane_naive", *gpu) == 16U);
+}
+
+void test_expected_local_size_probes() {
+    const bitnet::GpuProfile* gpu = bitnet::gpu_profile_for_device("no such device");
+    CHECK(bitnet::expected_local_size("bw_probe", *gpu) == 256U);
+    CHECK(bitnet::expected_local_size("stream_bw_probe", *gpu) == 256U);
+    CHECK(bitnet::expected_local_size("alu_countbits_probe", *gpu) == 256U);
+    CHECK(bitnet::expected_local_size("alu_fma_probe", *gpu) == 256U);
+    CHECK(bitnet::expected_local_size("vec_load_probe", *gpu) == 256U);
+    CHECK(bitnet::expected_local_size("null_probe", *gpu) == 64U);
+}
+
+void test_profile_named() {
+    const bitnet::GpuProfile* sweep = bitnet::gpu_profile_named("sw-gemv-t128");
+    CHECK(sweep != nullptr);
+    if (sweep != nullptr) {
+        CHECK(sweep->gemv_threads == 128U);
+    }
+    CHECK(bitnet::gpu_profile_named("no-such-profile") == nullptr);
+}
+
 } // namespace
 
 int main() {
@@ -385,6 +427,10 @@ int main() {
         test_metal_stub_contract();
         test_conformance_dispatch_groups();
         test_conformance_dispatch_fail_closed();
+        test_spirv_local_size();
+        test_expected_local_size_variants();
+        test_expected_local_size_probes();
+        test_profile_named();
 
         std::printf("unit tests: %d run, %d failed\n", g_count, g_failed);
         return g_failed == 0 ? 0 : 1;

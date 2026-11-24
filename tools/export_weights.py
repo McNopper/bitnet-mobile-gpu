@@ -6,7 +6,8 @@
 Downloads the bf16 master weights of microsoft/bitnet-b1.58-2B-4T-bf16,
 ternarizes a chosen weight matrix exactly like BitNet b1.58 training-time
 quantization (absmean scaling with ONE scale per tensor:
-gamma = mean(|W|) over the whole matrix, q = clip(round(W / gamma), -1, 1)),
+gamma = clamp(mean(|W|), min=1e-5) over the whole matrix,
+q = clip(round(W / gamma), -1, 1)),
 and writes a "BITNET1" container that `poc_tests --tensors <file>` consumes
 for bit-exact real-data validation.
 """
@@ -34,19 +35,22 @@ DEFAULT_TENSOR = "model.layers.12.mlp.down_proj.weight"  # [2560, 6912]
 def ternarize_absmean(w: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     """BitNet b1.58 training-time weight quantization (reference semantics).
 
-    gamma = mean(|W|) over the WHOLE tensor (arXiv 2402.17764; the HF
-    reference code uses w.abs().mean() per tensor, not per row);
-    q = clip(round(W / gamma), -1, 1). The bf16 master weights are stored
+    gamma = clamp(mean(|W|), min=1e-5) over the WHOLE tensor (arXiv
+    2402.17764; the HF reference code uses w.abs().mean().clamp_(min=1e-5)
+    per tensor, not per row); q = clip(round(W / gamma), -1, 1). The bf16
+    master weights are stored
     as (ternary * gamma) with tiny bf16 rounding, so round() reproduces
     the exact ternary values by construction. The container keeps the
     historical per-row gamma layout (n floats, all equal) so the format
     version and every reader stay unchanged.
     """
-    gamma_scalar = float(np.mean(np.abs(w)))
-    q = np.rint(w / gamma_scalar).astype(np.int8)
-    np.clip(q, -1, 1, out=q)
+    # HF WeightQuant clamps the mean at 1e-5, which also defines the
+    # all-zero case. Clip the rounded ratio BEFORE the int8 cast so large
+    # finite ratios cannot wrap around into the ternary alphabet.
+    gamma_scalar = max(float(np.mean(np.abs(w))), 1e-5)
+    q = np.clip(np.rint(w / gamma_scalar), -1, 1).astype(np.int8)
     gamma = np.full(w.shape[0], gamma_scalar, dtype=np.float32)
-    return q.astype(np.int8), gamma
+    return q, gamma
 
 
 def write_container(path: Path, weights: np.ndarray, gamma: np.ndarray) -> None:
@@ -186,8 +190,8 @@ def main() -> None:
         "tensor": args.tensor,
         "shape": list(w.shape),
         "ternarization": (
-            "gamma=mean(|W|) over the whole tensor (one scale; stored as n equal "
-            "per-row floats); q=clip(round(W/gamma),-1,1)"
+            "gamma=clamp(mean(|W|),min=1e-5) over the whole tensor (one scale; "
+            "stored as n equal per-row floats); q=clip(round(W/gamma),-1,1)"
         ),
         "nonzero_fraction": nonzeros,
         "gamma_mean": float(np.mean(gamma)),

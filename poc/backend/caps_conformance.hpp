@@ -32,6 +32,18 @@ struct ConformanceResult {
     int violations = 0;
 };
 
+// vkCmdDispatch group counts must be nonzero here and within the device's
+// advertised per-axis limits. Shared by the test and benchmark harnesses.
+[[nodiscard]] inline bool dispatch_groups_within_caps(const std::array<uint32_t, 3>& groups,
+                                                      const DeviceCaps& caps) {
+    for (size_t axis = 0; axis < groups.size(); ++axis) {
+        if (groups[axis] == 0U || groups[axis] > caps.max_workgroup_count[axis]) {
+            return false;
+        }
+    }
+    return true;
+}
+
 // Buffer-size models per family contract (poc/common/format.hpp packers):
 // plane format stores 2 bit-planes of 32 weights per uint word pair
 // (2 * ceil(k/32) words per row); the uint4 plane-family format packs 64

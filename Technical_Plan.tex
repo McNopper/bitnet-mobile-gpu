@@ -180,11 +180,11 @@ Finding & Measured \\
 \endhead%
 \bottomrule\noalign{}
 \endlastfoot%
-Correctness & every kernel reproduces the CPU oracle exactly on all four
-GPUs: 20 synthetic shapes, a hand-computed known-answer vector, a real
-model layer and a full BitLinear forward; Vulkan validation layer: 0
+Correctness & every applicable core kernel reproduces the CPU oracle
+exactly on all four GPUs: 20 synthetic shapes, a hand-computed
+known-answer vector, a real model layer and a full BitLinear forward; Vulkan validation layer: 0
 messages (desktop) \\
-GPU PoC, decode (linear layers only, upper bound) & 2.20 tokens/s
+GPU PoC, decode (30-layer projections; head separate, upper bound) & 2.20 tokens/s
 (Mali-G57), 6.62 (Mali-G52), 42.8 (Adreno 740) \\
 CPU, llama.cpp, complete model & 2.56 tokens/s (Mali-G57 tablet), 20.8
 (Adreno 740 headset); on the Mali-G52 tablet (2.42 GiB of memory) the
@@ -193,8 +193,9 @@ CPU, llama.cpp, complete model & 2.56 tokens/s (Mali-G57 tablet), 20.8
 CPU decode is bound by memory bandwidth & the CPU path reads weights at
 85-91\% of the CPU's measured read bandwidth; re-encoding the output
 head from 16 to 6.6 bits per weight raises decode by 39-40\% \\
-GPU arithmetic limit & on the single-core Mali-G57 the AND + popcount
-arithmetic alone takes 508 of the 573 ms per token \\
+GPU arithmetic probe (not a hard floor) & on the single-core Mali-G57 the
+standalone AND + popcount probe takes 508 ms; current decode takes 455 ms,
+so the probe cannot be treated as a binding lower bound on time \\
 llama.cpp gaps for this model & two converter defects and a wrong
 activation function in the model graph: perplexity 99.3 upstream, 16.80
 after a one-line fix, 16.82 in the reference implementation \\
@@ -208,9 +209,10 @@ head is the largest lever and is measured (\S{}5, \S{}7). (3) The GPU
 reads memory more slowly than the CPU on all three devices, so a GPU
 decode path with the same bytes per token has the lower bound. Where a
 GPU path can still pay off is derived per device from the measured
-bounds (\S{}3.5): decode and prompt processing on the Adreno 740 class
-(after the optimizations of \S{}5.3), and possibly energy, which is not
-yet measured. (4) Every GPU claim in the
+bounds (\S{}3.5): prompt processing on the Adreno 740 class, and possibly
+energy, which is not yet measured. Adreno decode remains unproven: its
+layer-only GPU rate is not workload-equivalent to the complete CPU run,
+and the shipping-format memory bound is below the replacement threshold. (4) Every GPU claim in the
 plan is gated by a measured CPU baseline on the same device.
 
 \section{1. Kernel design for 1.58-bit weights on mobile GPUs}\label{kernel-design-for-1.58-bit-weights-on-mobile-gpus}
@@ -245,8 +247,8 @@ all of them once (\S{}1.4) & Bytes per token is the decode ceiling.
 Store 2 bits per weight instead of 8 and keep the decode kernel a pure
 streaming GEMV \\
 GPU & On all three devices the GPU reads memory more slowly than the CPU
-(\S{}7.1), and on the single-core Mali-G57 the arithmetic roof binds
-before the memory roof (\S{}5.2) & Decode is optimized for bytes per
+(\S{}7.1), and on the single-core Mali-G57 the arithmetic reference is
+below the memory reference (\S{}5.2) & Decode is optimized for bytes per
 token first and for operations per weight second; one submission per
 token gives 1.7x to 3.2x (\S{}5.3). Prompt processing is
 arithmetic-bound and reuses each weight across the whole token block,
@@ -258,15 +260,17 @@ measured variant that wins 1 of 9 decode cells (\S{}1.3); the form
 inside llama.cpp follows \S{}2.3 \\
 GPU, Mali & On both Mali GPUs the decode kernel with the planes
 regrouped into 128-bit units (five loads per 64 weights) measures
-fastest; on Adreno 740 the plain bit-plane kernel does (\S{}5.1) & The
-plane-unit layout stays in the kernel set next to the bit-planes, and
-the champion is chosen per device by measurement (\S{}1.6) \\
+fastest; on Adreno 740 the interleaved-16 bit-plane K-split does
+(\S{}5.1) & The plane-unit layout stays in the kernel set next to the
+bit-planes, and the champion is chosen per device by measurement
+(\S{}1.6) \\
 GPU, Adreno & 65,535 workgroups per dispatch axis, which the 128,256-row
 output head exceeds; device loss when one submission runs for about 2 s
 (\S{}1.6); a submission floor of 0.22 ms (\S{}7.1) & Grids must stay
-legal, and submissions few but short. Kernels split over K with atomics,
-work is cut into submissions below the time limit, and every knob and
-dispatch grid is checked against the device limits before any GPU work
+legal, and submissions few and within the measured time budget. Kernels
+split over K with atomics; champion selection rejects overlong
+submissions rather than dynamically splitting sequences, and every knob
+and dispatch grid is checked against device limits before any GPU work
 (\S{}5.3) \\
 Devices disagree & Shared-memory staging is 2.5x faster on Mali-G52 and
 1.4x slower on Mali-G57 (\S{}5.3) & No hand-picked universal kernel.
@@ -395,9 +399,10 @@ Mechanism
 \endlastfoot%
 bit-plane, one thread per output & \texttt{gemv\_bitplane\_rowserial},
 \texttt{gemm\_bitplane\_naive} & the identity of \S{}1.3, no cooperation \\
-bit-plane, split over K & \texttt{gemv\_/gemm\_bitplane\_ksplit} &
-slices of K accumulate with atomic adds; the dispatch grid stays small
-for very wide outputs \\
+bit-plane, split over K & \texttt{gemv\_/gemm\_bitplane\_ksplit},
+\texttt{gemv\_bitplane\_ksplit\_il} & slices of K accumulate with atomic
+adds; the interleaved-16 variant coalesces consecutive rows; the dispatch
+grid stays small for very wide outputs \\
 bit-plane, cooperative & \texttt{gemv\_bitplane\_rowcoop},
 \texttt{gemm\_bitplane\_cellcoop} & one workgroup per output row or
 cell, threads share the reduction \\
@@ -452,7 +457,7 @@ Integer dot product & exposed, not accelerated & exposed, not
 accelerated & no packed-dot intrinsic in the Metal Shading Language:
 Slang emits a four-lane helper \\
 Fastest decode kernel & \texttt{gemv\_plane\_rowcoop} &
-\texttt{gemv\_bitplane\_ksplit} & not measured \\
+\texttt{gemv\_bitplane\_ksplit\_il} & not measured \\
 Fastest prompt kernel & \texttt{gemm\_bitplane\_naive} (G57),
 \texttt{gemm\_plane\_tiled} (G52) & \texttt{gemm\_bitplane\_naive} & not
 measured \\
@@ -472,11 +477,12 @@ measured \\
   configuration before any GPU work. Tiling against the 128 MiB buffer
   limit is required for the f16 head (0.66 GB).
 \item
-  \textbf{Work is cut into submissions below the device's time limit}
-  (about 2 s on Adreno 740) and batched above the per-submission floor
-  (0.2-0.4 ms, \S{}5).
+  \textbf{Champions are selected so their measured submissions fit the
+  device's time limit} (about 2 s on Adreno 740); calls are batched above
+  the per-submission floor (0.2-0.4 ms, \S{}5). The system pass does not
+  dynamically split a sequence by GPU time.
 \item
-  \textbf{Apple.} No Apple hardware was available. All twelve kernels
+  \textbf{Apple.} No Apple hardware was available. All twelve core kernels
   and the probes compile from the same Slang source to Metal Shading
   Language (\texttt{popcount}, \texttt{threadgroup} arrays and atomics
   are emitted); none was executed.\ llama.cpp already ships Metal kernels
@@ -750,9 +756,9 @@ in this report.
   dispatches half of a grid and requires the check to fail.
 \item
   \textbf{The whole pass is measured, not only isolated kernels.} The
-  system pass runs the real layer list: 30 layers \texttimes{} 7 projections per
-  token plus the output head, one token for decode, 64 tokens for prompt
-  processing.
+  system pass measures 30 layers \texttimes{} 7 projections per token and
+  reports the output head as a separate pass. Decode uses one token,
+  prompt processing 64. Layer and head times are never combined silently.
 \item
   \textbf{Kernel candidates are compared at system level, twice, in
   opposite order,} so that thermal drift appears as a difference between
@@ -795,7 +801,7 @@ A/B \\
 \texttt{bw\_probe} (GPU kernel) & sustained read bandwidth of the GPU &
 memory roof \\
 \texttt{alu\_countbits\_probe} (GPU kernel) & rate of the bit-plane
-arithmetic with no memory traffic & arithmetic roof \\
+arithmetic with no memory traffic & arithmetic reference rate \\
 \texttt{null\_probe} (GPU kernel) & cost of one submission and fence &
 batching decision \\
 \texttt{poc\_membw} & read bandwidth of 1..n CPU threads & CPU memory
@@ -815,20 +821,25 @@ this report quotes.
 
 \subsection{3.3 Roofline model}\label{roofline-model}
 
-The measurements are read against two ceilings [10]. A token must
-read every weight byte once and perform a fixed amount of arithmetic, so
+The measurements are read against a memory ceiling and an arithmetic
+reference rate [10]. A token must read every weight byte once and perform
+a fixed amount of arithmetic, giving the first-order comparisons
 
 \[
-\text{tokens/s} \le\min\left(\frac{B}{\text{bytes per token}},\;
-\frac{A}{\text{weights per token}}\right),
+\text{memory-bound tokens/s} = \frac{B}{\text{bytes per token}},\qquad
+\text{arithmetic-reference tokens/s} = \frac{A}{\text{weights per token}},
 \]
 
 with \(B\) the measured read bandwidth (GPU:\@ \texttt{bw\_probe}; CPU:\@
 \texttt{poc\_membw}, in the spirit of STREAM [11]) and \(A\) the
 measured rate of the kernel's arithmetic
-(\texttt{alu\_countbits\_probe}). Both are empirical: the highest rate a
-probe reached, not a data-sheet value. The model has 2.084 billion
-ternary weights; bytes per token depend on the storage format (\S{}7).
+(\texttt{alu\_countbits\_probe}). The memory term is an upper bound for a
+fixed format and measured bandwidth. The arithmetic term is an empirical
+reference, not a guaranteed floor: a different work decomposition or
+compiler result can beat it, as the 455 ms G57 decode against the 508 ms
+probe shows. Both inputs are measured, not data-sheet values. The model
+has 2.084 billion ternary weights; bytes per token depend on the storage
+format (\S{}7).
 
 \subsection{3.4 Vendor tools}\label{vendor-tools}
 
@@ -889,7 +900,7 @@ Status
 \endlastfoot%
 decode tokens/s, prompt tokens/s & \texttt{poc\_bench\ -{}-system} (GPU
 kernels), \texttt{llama-bench} (complete model) & measured \\
-bandwidth and arithmetic roofs & probes of \S{}3.2 & measured \\
+bandwidth bound and arithmetic reference rate & probes of \S{}3.2 & measured \\
 perplexity, KL divergence & \texttt{llama-perplexity}, reference
 implementation & measured for the CPU path and the head formats \\
 memory headroom & \texttt{/proc/meminfo} before and after each run &
@@ -906,7 +917,8 @@ measured \\
 \textbf{Concrete optimization targets} are derived per device from the
 measured bounds and the CPU reference, not chosen freely. Rates in
 tokens/s; CPU figures with the Q6\_K output head, the format that passes
-the accuracy criterion of \S{}6.2; PoC figures are the linear layers only.
+the accuracy criterion of \S{}6.2; PoC figures are the 30-layer projections
+only, with the output head measured separately.
 
 {\def\LTcaptype{none} % do not increment counter
 \begin{longtable}[]{@{}
@@ -931,15 +943,16 @@ Adreno 740 headset
 Decode on the shipping backend: $\geq$ 75\% of the bandwidth bound (read
 bandwidth / 0.807 GB per token) & $\geq$ 3.1; CPU measures 3.58 & $\geq$ 8.7; CPU
 measures 5.56 & $\geq$ 27.2; CPU measures 28.8 \\
-GPU decode replaces CPU decode: $\geq$ 1.2x CPU, limited by GPU read
-bandwidth / bytes per token and by the arithmetic roof & 4.3 needed;
-bounds 3.7 (memory) and 1.97 (arithmetic): not reachable; PoC 2.20 &
-6.7 needed, bound 8.0; PoC 6.62 (1.19x CPU) & 34.6 needed; PoC 42.8 on
-linear-layer bytes, an upper bound that passes at 1.49x CPU \\
-GPU prompt processing replaces the CPU:\@ $\geq$ 1.2x CPU, limited by the
-arithmetic roof & 9.6 needed, roof 1.97: not reachable with this
-arithmetic & 12.6 needed, roof 13.4; PoC 5.73 & 64.2 needed, roof 69.8;
-PoC 61.5 \\
+GPU decode replaces CPU decode: $\geq$ 1.2x CPU, assessed against the
+shipping-format memory bound and arithmetic reference & 4.3 needed;
+3.7 memory bound and 1.97 arithmetic reference leave no headroom; PoC
+2.20 & 6.7 needed, 8.0 memory bound; layer-only PoC 6.62 is 1.19x CPU,
+below the threshold & 34.6 needed; Q6\_K shipping-format memory bound
+$27.5/0.807 = 34.1$: not met. Layer-only PoC 42.8 is not comparable \\
+GPU prompt processing replaces the CPU:\@ $\geq$ 1.2x CPU, compared with
+the arithmetic reference & 9.6 needed, reference 1.97: no headroom with
+this arithmetic & 12.6 needed, reference 13.4; PoC 5.73 & 64.2 needed,
+reference 69.8; PoC 61.5 \\
 \end{longtable}
 }
 
@@ -984,7 +997,7 @@ Model conversion & \texttt{convert\_hf\_to\_gguf.py}, \texttt{gguf-py},
 \texttt{llama-quantize} & same & same, plus Hugging Face
 \texttt{transformers} as reference implementation \\
 Build & Android NDK r27 (clang 18), CMake, Ninja & Xcode, CMake & NDK
-r27; MSVC 19.51 on the Windows host; CMake 4.4, Ninja 1.13 \\
+r27; MSVC 19.52 on the Windows host; CMake 4.4, Ninja 1.13 \\
 Deployment & \texttt{adb}, \texttt{examples/llama.android} &
 \texttt{examples/llama.swiftui}, xcframework & \texttt{adb} \\
 Evaluation & \texttt{llama-bench}, \texttt{llama-perplexity},
@@ -1010,9 +1023,9 @@ measured leverage, and names the candidates that were not adopted.
 \subsection{5.1 What was built and
 measured}\label{what-was-built-and-measured}
 
-Eleven kernels in six families (\S{}1.5) were measured over eight shapes of
-the model; every row was verified against the oracle before it was
-timed. Whole-pass champions, selected by system-level A/B over all
+Twelve core kernels in six families (\S{}1.5) were measured over the model
+shapes; every row was verified against the oracle before it was timed.
+Whole-pass champions, selected by system-level A/B over all
 candidates that are legal for every shape of the role, including the
 output head:
 
@@ -1047,6 +1060,9 @@ Adreno 740 & \texttt{gemv\_bitplane\_ksplit\_il} & 23.4 (43.4) &
 \texttt{gemm\_bitplane\_naive} & 1,040 \\
 \end{longtable}
 }
+
+Decode times in this table cover the 30-layer projections only; the output
+head is measured and reported separately (\S{}5.3).
 
 On Adreno the three cooperative decode kernels are rejected for the
 output head (128,256 workgroups against a limit of 65,535), and two
@@ -1099,9 +1115,9 @@ leverage}\label{strategies-employed-in-order-of-measured-leverage}
   \textbf{The right processor per role.} Decode has a ceiling in bytes
   per token: the CPU path reaches 85-91\% of its read bandwidth on two
   devices, and the GPUs measured here read memory more slowly than the
-  CPUs (\S{}7); on the Mali-G57 the GPU's arithmetic roof binds even
-  earlier (\S{}5.2). Prompt processing is arithmetic-bound; there the
-  GPU can win where its arithmetic roof is above the CPU's rate (Adreno
+  CPUs (\S{}7); on the Mali-G57 the GPU's arithmetic reference is even
+  lower (\S{}5.2). Prompt processing is arithmetic-bound; there the GPU
+  can win where its arithmetic reference is above the CPU's rate (Adreno
   740: 69.8 against 53.5 tokens/s).
 \item
   \textbf{Bit-planes instead of multiply-accumulate.} 16 AND + 16
@@ -1127,8 +1143,9 @@ leverage}\label{strategies-employed-in-order-of-measured-leverage}
   Adreno 740, where each thread owns a different output row: decode 23.4
   against 43.4 ms/token (ABBA, -45 to -47\% in both orders), output head
   2.9 against 7.4 ms (-60\%). The oracle pins the permutation: the
-  repack is lossless and the kernel is bit-exact on all four GPUs and
-  every shape of the harness (167 checks).
+  repack is lossless and the kernel is bit-exact on all four GPUs on all
+  ten applicable single-token cases (nine synthetic shapes and the GEMV
+  known-answer vector; it has no multi-token or real-weight lane).
 \item
   \textbf{One submission per token, not per call.} Batching the 210
   calls of a token makes decode 1.7x (Mali-G57), 2.8x (Mali-G52) and
@@ -1137,8 +1154,9 @@ leverage}\label{strategies-employed-in-order-of-measured-leverage}
   \texttimes{} 210) and the GPU clock dropping between submissions.
 \item
   \textbf{Shape-aware dispatch.} Splitting over K with atomics keeps the
-  dispatch grid small enough for the 128,256-row head on Adreno;
-  submissions are cut below the device's time limit.
+  dispatch grid small enough for the 128,256-row head on Adreno. Champion
+  selection rejects kernels whose individual submissions exceed the device
+  time limit; it does not split a batched sequence dynamically.
 \item
   \textbf{Per-device knob profiles as data.} Tile sizes, thread counts
   and the champion per role live in one generated table; a capability
@@ -1223,8 +1241,8 @@ Status
 \endlastfoot%
 Integer kernels & GPU output equals the CPU oracle, zero tolerance & met
 on four GPUs \\
-Known answer & hand-computed vector, expected $\pm$160, through every kernel
-& met \\
+Known answer & hand-computed vector, expected $\pm$160, through every
+applicable core kernel & met \\
 Real weights & one layer of the model (2560 \texttimes{} 6912), ternarized by the
 reference rule, with synthetic activations & met on four GPUs \\
 BitLinear forward & float in, reference quantizer, kernel, rescale:
@@ -1273,7 +1291,7 @@ GPU backend ships for a role & $\geq$ 1.2x the tuned CPU path of the same
 device in tokens/s, or within 10\% of it at $\geq$ 20\% lower energy per
 token & measured CPU reference; energy not measured \\
 Prompt processing on the GPU & Adreno 740 class: $\geq$ 64 tokens/s (1.2x
-CPU); per device: \S{}3.5 & PoC upper bound 61.5, arithmetic roof 69.8 \\
+CPU); per device: \S{}3.5 & PoC upper bound 61.5, arithmetic reference 69.8 \\
 Memory & model plus KV cache below the memory available at start; no
 page thrashing & Mali-G52 tablet: only the quantized-head files run \\
 Sustained rate & $\geq$ 90\% of the initial rate after 30 minutes & not measured \\
@@ -1300,8 +1318,8 @@ baselines}\label{benchmarks-and-baselines}
   the upstream GPU backend on these devices is not measured.
 \end{itemize}
 
-Measured status (tokens/s; GPU = PoC kernels, linear layers only, an
-upper bound; CPU = llama.cpp at commit \texttt{93cf736a8d1d} with the
+Measured status (tokens/s; GPU = PoC 30-layer projections, output head
+separate, an upper bound; CPU = llama.cpp at commit \texttt{93cf736a8d1d} with the
 converter fixes, built with \texttt{-march=armv8.2-a+dotprod+fp16},
 complete model, best thread count per cell):
 
@@ -1351,17 +1369,20 @@ highest total of all (9.36 GB/s) --- the ceiling is the memory system
 48\%-of-bound gap, and the eight-thread collapse lives in the threading,
 not in the cores.
 
-\textbf{The ship rule now passes on the Adreno 740 class for decode.}
-After the workgroup-sizing and interleaved-layout optimizations of
-2026-11-24, the GPU linear-layers upper bound is 42.8 tokens/s against
-28.8 for the tuned CPU path on the same device (1.49x). It is an upper
-bound: the PoC measures linear layers only, without attention,
-normalization and sampling, so the full-model GPU number is not
-measured. On the two Mali devices the GPU upper bound stays below the
-CPU rate (6.62 against 5.56 on the G52, 1.19x; 2.20 against 3.58 on the
-G57). The CPU remains the shipping decode path everywhere today, and a
-GPU path pays off where the bounds of \S{}3.5 allow it: decode on the
-Adreno 740 class and prompt processing there as well.
+\textbf{The ship rule is not established for Adreno 740 decode.} The
+42.8 tokens/s layer-only GPU result and the 28.8 tokens/s complete-model
+CPU result are different workloads, so their ratio is not a valid ship
+criterion. The head is a separate pass and a 2-bit stand-in, not the
+accuracy-approved Q6\_K shipping head; no combined layer-plus-head
+measurement exists. More decisively, the Q6\_K workload's measured GPU
+memory bound is $27.5/0.807 = 34.1$ tokens/s, below the
+$1.2 \times 28.8 = 34.6$ required to replace the CPU.\@ On Mali-G52 the
+layer-only 6.62 exceeds the CPU's 5.56 by 1.19x but remains below the
+1.2x threshold; on Mali-G57, 2.20 is below 3.58. The CPU therefore
+remains the shipping decode path everywhere today. Adreno prompt
+processing remains a candidate, and a future decode claim requires a
+combined measurement in an accuracy-approved format against the same
+complete workload.
 
 \section{7. Hardware constraints; low power, memory bandwidth, compute
 overhead}\label{hardware-constraints-low-power-memory-bandwidth-compute-overhead}
@@ -1400,7 +1421,7 @@ Memory (\texttt{MemTotal}) & 2.72 GiB & 2.42 GiB & 7.58 GiB \\
 CPU read bandwidth, best / all cores (GB/s) & 3.91 / 3.37 & 9.35 / 9.28
 & 31.9 / 29.3 \\
 GPU read bandwidth (GB/s) & 2.96 & 6.46 & 27.5 \\
-GPU arithmetic roof (tokens/s) & 1.97 & 13.4 & 69.8 \\
+GPU arithmetic reference (tokens/s; not a hard floor) & 1.97 & 13.4 & 69.8 \\
 Submission floor (ms) & 0.40 & 0.37 & 0.22 \\
 Dispatch groups per axis & 2\textthreesuperior{}\texttwosuperior{}\textminus{}1 & 2\textthreesuperior{}\texttwosuperior{}\textminus{}1 & 65,535 \\
 Storage buffer & 256 MiB & 256 MiB & 128 MiB \\
@@ -1480,8 +1501,9 @@ per batch). On all three devices the GPU's read bandwidth is below the
 CPU's, so a GPU decode path with the same bytes per token has a lower
 bound than the CPU path.
 
-\textbf{Compute.} The GPU arithmetic roof is the binding limit on the
-single-core Mali-G57 (\S{}5.2).
+\textbf{Compute.} The arithmetic probe indicates severe pressure on the
+single-core Mali-G57, but it is a reference measurement rather than a
+binding floor (\S{}5.2).
 
 \textbf{Drivers.} Vulkan versions 1.1 to 1.3, different limits per
 vendor (\S{}1.6), no validation layer on the devices, one device loss by
@@ -1514,7 +1536,7 @@ spread (47.5 $\pm$ 8.7 tokens/s); the value used is its repeat (53.5 $\pm$ 0.1).
   actually used.
 \item
   \textbf{Compute overhead:} bit-plane arithmetic; kernels selected per
-  device and role; batched submissions below the device's time limit;
+  device and role so their measured submissions fit the device time limit;
   persistent pipelines and descriptor sets; weights repacked once at
   load, never per token.
 \end{itemize}
@@ -1534,12 +1556,12 @@ kernels.
 \begin{itemize}
 \tightlist%
 \item
-  \textbf{Scope of the PoC numbers.} The GPU rates are upper bounds:
-  linear layers only, without attention, normalization, sampling and the
-  quantization of activations between layers; the 30 layers reuse the
-  buffers of one layer, so memory capacity is not exercised; the PoC's
-  output head is a 2-bit stand-in. The CPU rates are complete model
-  runs.
+  \textbf{Scope of the PoC numbers.} The GPU rates are upper bounds for
+  the 30-layer projections, without attention, normalization, sampling or
+  activation quantization between layers; the output head is measured
+  separately as a 2-bit stand-in. The 30 layers reuse the buffers of one
+  layer, so memory capacity is not exercised. The CPU rates are complete
+  model runs.
 \item
   \textbf{Sample sizes.} Perplexity and KL figures use 16 chunks (4,080
   scored tokens) of WikiText-2; they decide nothing finally and are
@@ -1554,8 +1576,8 @@ kernels.
 \item
   \textbf{Reproducibility.} Every measured number in this report comes
   from a log written by the measurement protocol of \S{}3.1. The logs,
-  the measurement scripts and the summary tool are not part of the
-  delivery. The proof of concept builds and runs from the delivered
+  the measurement scripts and the summary tool are not part of this
+  repository. The proof of concept builds and runs from the tracked
   source; \texttt{README.md} is its entry point.
 \item
   \textbf{Authorship.} Developed with AI assistance under the author's
@@ -1566,8 +1588,8 @@ kernels.
 
 \textbf{Kernel.} Ternary (and 1-bit) matrix multiplication in Vulkan
 compute for one BitLinear layer: int8 activations \texttimes{} packed ternary
-weights $\rightarrow$ int32 accumulators, exactly as \S{}1.2-1.3. Eleven kernels in one
-Slang source, compiled per GPU profile.
+weights $\rightarrow$ int32 accumulators, exactly as \S{}1.2-1.3. Twelve
+core kernels in one Slang source, compiled per GPU profile.
 
 % Set as a fixed block in its reading position, not as a float: as a
 % float it was pushed behind the text of this section.
@@ -1612,8 +1634,8 @@ generated profile table, one backend seam}
 
 \textbf{Test harness (\texttt{poc\_tests}).} For every shape the harness
 generates deterministic inputs, computes the reference with a naive CPU
-loop, runs every kernel on the GPU and requires equal int32 outputs
-(differential testing [12]).
+loop, runs every applicable core kernel on the GPU and requires equal
+int32 outputs (differential testing [12]).
 
 {\def\LTcaptype{none} % do not increment counter
 \begin{longtable}[]{@{}
@@ -1633,10 +1655,12 @@ Known-answer vector (\texttt{data/golden\_vector.txt}) & \(K = 64\);
 activations \(+3, -2, +3, -2, \dots\); weights \(w_{ij} = +1\) if
 \(i + j\) even, else \(-1\); expected output \(+160\) for even \(i\),
 \(-160\) for odd \(i\) (\(32 \cdot3 + 32 \cdot2\)), checked against
-the file, the closed form and every kernel \\
-Synthetic shapes & 9 single-token and 11 multi-token shapes: the layer
-shapes of the model, odd sizes (\(K\) from 1 to 513, 1 to 65 tokens),
-extreme values (+127/\textminus{}128), all zeros, 1-bit weights \{\textminus{}1, +1\} \\
+the file, the closed form and every applicable core kernel \\
+Synthetic shapes & 9 single-token and 11 multi-token shapes: q/o, gate/up
+and down-projection dimensions, odd sizes (\(K\) from 1 to 513, 1 to 65
+tokens), extreme values (+127/\textminus{}128), all zeros, 1-bit weights
+\{\textminus{}1, +1\}. The 640 \texttimes{} 2560 K/V projection is covered
+by the system benchmark, not by every core kernel \\
 Real weights & layer 12 \texttt{down\_proj} of the model (2560 \texttimes{} 6912),
 ternarized with the reference formula (checked element-wise by a Python
 test), 8 tokens of seeded synthetic int8 activations; the container is
@@ -1701,7 +1725,7 @@ are in \texttt{README.md}.
 \centering
 \begin{tikzpicture}[scale=0.75, transform shape]
 % content cross-checked against the ground truth: the original mermaid
-\umlclass{p8mat}{(1.6,14.1)}{red}{}{PackedInt8MatPair}{int8 lanes for OpSDot}{\phantom{m}}
+\umlclass{p8mat}{(1.6,14.1)}{red}{}{PackedInt8MatPair}{int8 lanes for cooperative matrix}{\phantom{m}}
 \umlclass{strategy}{(6.9,14.2)}{magenta}{$\langle\langle$Slang interface$\rangle\rangle$}{IBitMatMulStrategy}{\phantom{m}}{+accumulate(rowM, rowN, wordBegin, wordEnd, acc)}
 \umlclass{poc}{(17.6,14.2)}{orange}{$\langle\langle$poc\_tests, poc\_bench$\rangle\rangle$}{PocHarness}{+known-answer vector \\ +negative controls \\ +oracle-verified timing}{+compare\_tensor(gpu, cpu\_oracle)}
 \umlclass{bitplane}{(6.9,9.8)}{teal}{}{BitplanePopcountStrategy}{AND + popcount identity}{+accumulate(rowM, rowN, wordBegin, wordEnd, acc)}
@@ -1711,9 +1735,9 @@ are in \texttt{README.md}.
 \umlclass{ptv6}{(20.8,5.0)}{cyan}{}{PackedTernaryV6}{uint4 plane units}{\phantom{m}}
 \umlclass{vbackend}{(6.6,-0.7)}{orange}{}{VulkanBackend}{one instance per run \\ caps-driven variant selection \\ SPIR-V module cache}{\phantom{m}}
 \umlclass{metal}{(16.0,2.3)}{green}{}{MetalBackendStub}{unavailable at runtime}{+probe\_caps() : DeviceCaps}
-\umlclass{ibuf}{(10.6,-5.1)}{teal}{$\langle\langle$interface$\rangle\rangle$}{IBuffer}{\phantom{m}}{+mapped() : void \\ +size() : uint64\_t}
+\umlclass{ibuf}{(10.6,-5.1)}{teal}{$\langle\langle$interface$\rangle\rangle$}{IBuffer}{\phantom{m}}{+mapped() : void* \\ +size() : uint64\_t}
 \umlclass{kdesc}{(1.6,-5.1)}{red}{}{KernelDesc}{+name string \\ +numthreads[3]}{\phantom{m}}
-\umlclass{vbuf}{(6.6,-5.1)}{cyan}{}{VulkanBuffer}{persistently mapped}{+mapped() : void}
+\umlclass{vbuf}{(6.6,-5.1)}{cyan}{}{VulkanBuffer}{persistently mapped}{+mapped() : void*}
 \umlclass{dispatch}{(13.7,-5.1)}{Goldenrod}{}{Dispatch}{+kernel void* \\ +groups[3]}{\phantom{m}}
 \umlclass{caps}{(18.2,-5.1)}{violet}{}{DeviceCaps}{+device\_name, driver\_version, api\_version \\ +limits and feature flags}{\phantom{m}}
 % relations (labels as in the ground-truth diagram). Every line starts and

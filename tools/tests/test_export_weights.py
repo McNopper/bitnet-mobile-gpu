@@ -64,6 +64,22 @@ def test_ternarize_absmean_range() -> None:
     assert bool(np.all(gamma == gamma[0]))  # per-tensor: one scalar, n-equal layout
 
 
+def test_ternarize_clips_before_int8_cast() -> None:
+    # gamma = 1000/256 = 3.90625, so the rounded ratio is 256. Casting
+    # before clipping wraps that to int8 zero; the reference clips to +1.
+    w = np.zeros((1, 256), dtype=np.float32)
+    w[0, 0] = 1000.0
+    q, _ = ternarize_absmean(w)
+    assert q[0, 0] == 1
+
+
+def test_ternarize_all_zero_uses_reference_floor() -> None:
+    w = np.zeros((2, 4), dtype=np.float32)
+    q, gamma = ternarize_absmean(w)
+    assert np.array_equal(q, np.zeros_like(w, dtype=np.int8))
+    assert np.all(gamma == np.float32(1e-5))
+
+
 REAL_CHECKPOINT = Path("models") / "bitnet-b1.58-2B-4T-bf16" / "model.safetensors"
 
 

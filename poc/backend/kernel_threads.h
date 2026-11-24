@@ -20,45 +20,52 @@
 
 #include <cstdint>
 #include <string>
+#include <string_view>
 
 namespace bitnet {
 
 inline uint32_t expected_local_size(const std::string& kernel, const GpuProfile& gpu) {
-    if (kernel == "gemv_dot_rowcoop") {
+    // The on-disk emulated-dot suffix changes the module, not its geometry.
+    std::string_view logical = kernel;
+    constexpr std::string_view emulated_suffix = "_emulated";
+    if (logical.ends_with(emulated_suffix)) {
+        logical.remove_suffix(emulated_suffix.size());
+    }
+    if (logical == "gemv_dot_rowcoop") {
         return gpu.gemv_dot_threads; // GEMV_DOT_ROWCOOP_THREADS
     }
-    if (kernel == "gemv_plane_rowcoop") {
+    if (logical == "gemv_plane_rowcoop") {
         return gpu.gemv6_threads; // GEMV_PLANE_ROWCOOP_THREADS, own profile knob
     }
-    if (is_coopmat_kernel(kernel)) {
+    if (is_coopmat_kernel(logical)) {
         return kCoopMatThreads; // gemm_coopmat: one 32-lane subgroup per workgroup
     }
-    if (is_microtile_kernel(kernel)) {
+    if (is_microtile_kernel(logical)) {
         return gpu.gemm_v7_threads; // gemm_plane_microtile[_image] (generated table)
     }
-    if (is_tiled_kernel(kernel)) {
+    if (is_tiled_kernel(logical)) {
         // gemm_bitplane_tiled / gemm_dot_tiled / gemm_plane_tiled (TILE_THREADS)
         return gpu.gemm_tile_threads;
     }
-    if (kernel == "gemv_bitplane_rowcoop" || kernel == "gemm_bitplane_cellcoop") {
+    if (logical == "gemv_bitplane_rowcoop" || logical == "gemm_bitplane_cellcoop") {
         return gpu.gemv_threads; // shared cooperative-row contract
                                  // (GEMV_*/GEMM_BITPLANE_CELLCOOP_THREADS)
     }
     // Fixed-contract kernels.
-    if (kernel == "gemv_bitplane_ksplit" || kernel == "gemv_bitplane_ksplit_il") {
+    if (logical == "gemv_bitplane_ksplit" || logical == "gemv_bitplane_ksplit_il") {
         return 256U;
     }
-    if (kernel == "gemm_bitplane_ksplit") {
+    if (logical == "gemm_bitplane_ksplit") {
         return 64U;
     }
-    if (kernel == "gemm_bitplane_naive") {
+    if (logical == "gemm_bitplane_naive") {
         return 16U; // (16, 16, 1)
     }
-    if (kernel == "bw_probe" || kernel == "stream_bw_probe" || kernel == "alu_countbits_probe" ||
-        kernel == "null_probe") {
-        return 64U; // null_probe: one 64-thread group per workgroup
+    if (logical == "bw_probe" || logical == "stream_bw_probe" || logical == "alu_countbits_probe" ||
+        logical == "alu_fma_probe" || logical == "vec_load_probe") {
+        return 256U;
     }
-    return 64U; // gemv_bitplane_rowserial and the default cooperative contract
+    return 64U; // gemv_bitplane_rowserial, null_probe and the default contract
 }
 
 } // namespace bitnet

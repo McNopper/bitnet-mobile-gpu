@@ -41,7 +41,8 @@ inline uint32_t version_patch(uint32_t v) {
 // through VK_KHR_get_physical_device_properties2 there. Integer dot
 // is NOT an API floor - it is capability-gated per feature (core 1.3
 // shaderIntegerDotProduct OR VK_KHR_shader_integer_dot_product), with a
-// bit-exact emulated fallback when absent.
+// bit-exact emulated fallback when absent. kMinApi10 is the PHYSICAL-DEVICE
+// floor; instance creation currently requests a Vulkan 1.3-capable loader.
 constexpr uint32_t kMinApi10 = 1U << 22;
 
 // Capability snapshot from the physical device (written as a Markdown
@@ -70,7 +71,7 @@ struct DeviceCaps {
     // Coop-mat MMA lane contract (gemm_coopmat): true when the device
     // ENUMERATES (vkGetPhysicalDeviceCooperativeMatrixPropertiesKHR) the
     // exact shape the module was compiled for - sint8*sint8 -> sint32,
-    // 8x8x32, workgroup scope, non-saturating - AND the SPIR-V's feature
+    // 16x16x32, subgroup scope, non-saturating - AND the SPIR-V's feature
     // dependencies (cooperativeMatrix, vulkanMemoryModel +
     // vulkanMemoryModelDeviceScope, shaderInt8) all query TRUE. Kernel
     // loading gates on this BEFORE any coop-mat dispatch (degrade, don't
@@ -79,7 +80,7 @@ struct DeviceCaps {
     uint32_t coop_mat_msize{};            // matched entry MSize
     uint32_t coop_mat_nsize{};            // matched entry NSize
     uint32_t coop_mat_ksize{};            // matched entry KSize
-    uint32_t coop_mat_scope{};            // matched entry scope (2 = workgroup)
+    uint32_t coop_mat_scope{};            // matched entry scope (3 = subgroup)
     uint32_t coop_mat_shape_count{};      // total enumerated shapes (evidence)
     uint32_t coop_mat_supported_stages{}; // cooperativeMatrixSupportedStages bitmask
     bool storage_8bit{};

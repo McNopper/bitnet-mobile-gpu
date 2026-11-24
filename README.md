@@ -1,6 +1,6 @@
 # 1.58-bit BitNet Inference on Mobile GPUs via llama.cpp
 
-This folder holds the two deliverables of the objective:
+This repository contains the two deliverables:
 
 1. **A technical plan report (PDF)**: `Technical_Plan.pdf` (this
    folder, next to this README; A4). The report documents the design,
@@ -26,14 +26,17 @@ This folder holds the two deliverables of the objective:
 ## How to execute
 
 Prerequisites: CMake + Ninja (PATH), Vulkan SDK 1.4.363.1 (`slangc`; set
-`VULKAN_SDK` or edit the hint in `CMakeLists.txt`), MSVC or clang with
-C++23, Python 3.12+. For the device steps: Android NDK r27 (the `android`
+`VULKAN_SDK` or edit the hint in `CMakeLists.txt`), a Vulkan 1.3-capable
+loader (physical devices may use the 1.0 popcount fallback), MSVC or clang
+with C++23, Python 3.12+. For the device steps: Android NDK r27 (the `android`
 preset in `CMakePresets.json` names its path) and `adb` on PATH
 (`scripts/run-on-device.ps1` reads the platform-tools path — adjust it to
 your SDK location). For rebuilding the report: a LaTeX distribution with
 `pdflatex` and `chktex`, for example TinyTeX
 (<https://yihui.org/tinytex/>) with
-`tlmgr install chktex pgf parskip microtype upquote`.
+`tlmgr install chktex pgf parskip microtype upquote`. The quality gate also
+requires markdownlint-cli2 (Node.js), ruff, mypy and pytest (Python),
+PSScriptAnalyzer, clang-tidy, cppcheck and clang-format on PATH.
 
 ```powershell
 # 1. Desktop build: Slang -> SPIR-V per GPU profile, then the host programs
@@ -50,7 +53,7 @@ pwsh scripts/build-windows.ps1
 
 # 4. Android device (arm64-v8a): build, push, run, stream the output
 pwsh scripts\build-android.ps1
-pwsh scripts\run-on-device.ps1
+pwsh scripts\run-on-device.ps1 -Serial <adb serial>
 
 # 5. Quality gate (all lanes); it needs the build tree of step 1
 pwsh scripts\verify.ps1
@@ -61,20 +64,22 @@ python tools\build_report.py
 ```
 
 The build is standard CMake + Ninja with `slangc` from the Vulkan SDK; the
-PowerShell scripts wrap it. Built and tested: Windows (MSVC 19.51) and
+PowerShell scripts wrap it. Built and tested: Windows (MSVC 19.52) and
 Android arm64-v8a (NDK r27, clang 18). Other hosts are not tested.
 
 ## Test harness and sample input/output validation
 
 For every shape the harness generates deterministic inputs, computes the
-reference with a naive CPU loop, runs every kernel on the GPU and requires
-equal int32 outputs; a deliberately under-dispatched kernel must fail the
-comparison (negative control, in every run). The sample input and expected
-output are the known-answer vector `data/golden_vector.txt`
-($K = 64$, expected $+160$ for even rows and $-160$ for odd ones), checked
-against the file, against the closed form and by every kernel. The 20
-synthetic shapes cover the layer shapes of the model, odd sizes, extreme
-values (+127/−128), all zeros and 1-bit weights.
+reference with a naive CPU loop, runs every applicable core kernel on the
+GPU and requires equal int32 outputs; a deliberately under-dispatched
+kernel must fail the comparison (negative control, in every run). The
+sample input and expected output are the known-answer vector
+`data/golden_vector.txt` ($K = 64$, expected $+160$ for even rows and
+$-160$ for odd ones), checked against the file, against the closed form
+and by every applicable core kernel. The 20 synthetic shapes cover the
+q/o, gate/up and down-projection dimensions, odd sizes, extreme values
+(+127/−128), all zeros and 1-bit weights. The 640 × 2560 K/V projection is
+covered by the system benchmark, not by every core kernel.
 
 One pytest case reads the bf16 checkpoint of the model (4.8 GB, not part
 of this folder) and is skipped when it is not present locally; the

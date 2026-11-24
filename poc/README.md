@@ -37,11 +37,11 @@ integer oracle is the gate.
 ## What the tests enforce
 
 - **Bit-exact or broken:** GPU output must equal the CPU oracle integer for
-  integer — zero tolerance, every shape, every kernel.
+  integer — zero tolerance, every shape, every applicable core kernel.
 - **The check can fail:** a deliberately under-dispatched grid must fail the
   comparison (negative control, every run); the known-answer vector is
   [golden_vector.txt](../data/golden_vector.txt), checked against the file,
-  a closed form and every kernel.
+  a closed form and every applicable core kernel.
 - **Limits before work:** every knob and dispatch grid is checked against
   the device limits before any GPU work; a breach fails the run.
 - **Timing only after the oracle:** a benchmark row exists only after its

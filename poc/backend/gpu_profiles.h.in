@@ -82,6 +82,22 @@ inline std::string to_lower_copy(std::string s) {
 // "NVIDIA" to knobs that were never measured on it; exact names keep
 // unmeasured devices on the conservative default profile. Tuning a new GPU
 // = adding a bitnet_compile_kernels_for row with its exact caps name.
+inline const GpuProfile* gpu_profile_named(const std::string& profile_dir) {
+    // Explicit benchmark sweeps use the generated row so host dispatch knobs
+    // and the compiled SPIR-V always come from the same profile.
+    static const GpuProfile kProfiles[] = {
+// clang-format off
+@BITNET_PROFILE_ROWS@
+// clang-format on
+    };
+    for (const auto& p : kProfiles) {
+        if (profile_dir == p.profile_dir) {
+            return &p;
+        }
+    }
+    return nullptr;
+}
+
 inline const GpuProfile* gpu_profile_for_device(const std::string& device_name) {
     const std::string device_lower = to_lower_copy(device_name);
     // GENERATED from the bitnet_compile_kernels_for calls in

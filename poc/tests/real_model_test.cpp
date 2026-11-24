@@ -120,7 +120,7 @@ int run_bitlinear_test(const bitnet::LoadedWeights& loaded) {
                     quantize_activation(x[static_cast<size_t>(r) * loaded.k + j], s_x[r]);
             }
         }
-        // Step 2: every core kernel vs the CPU oracle on the quantized input.
+        // Step 2: every applicable core kernel vs the CPU oracle on the quantized input.
         const Shape s{.m = m, .n = loaded.n, .k = loaded.k, .binary = false};
         bitnet::TernaryTensor t;
         t.m = m;
@@ -160,7 +160,8 @@ int run_bitlinear_test(const bitnet::LoadedWeights& loaded) {
                     s_x[0]);
         std::printf("  sample y[0][0..3]:     %.4f %.4f %.4f %.4f (gamma[0]=%.6f)\n", y_gpu[0],
                     y_gpu[1], y_gpu[2], y_gpu[3], loaded.gamma[0]);
-        std::printf("  PASS (all kernels bit-exact on q; %zu float outputs exactly equal)\n",
+        std::printf("  PASS (all applicable core kernels bit-exact on q; %zu float outputs exactly "
+                    "equal)\n",
                     y_gpu.size());
         return 0;
     } catch (const std::exception& e) {

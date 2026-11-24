@@ -245,36 +245,26 @@ void run_system(bitnet::IComputeBackend& backend, const bitnet::GpuProfile& gpu,
                 const bitnet::DeviceCaps& caps, uint32_t layers, uint32_t decode_tokens,
                 uint32_t prefill_tokens, bitnet::DotVariant dot_variant, bool fused_projections,
                 bool decode_only) {
-    // Champion kernels come from the generated profile table:
-    // one measured decode (GEMV) and one measured prefill (GEMM) kernel per
-    // device profile (or the --decode-champion / --prefill-champion A/B
-    // overrides). A dot-generation champion runs on EVERY device: the
-    // capability-driven variant picks the hardware or the emulated (slow)
-    // module; only --variant popcount skips the dot champion lane.
+    // Champion kernels come from the generated profile table or the A/B
+    // overrides. run_bench has already rejected experimental kernels and
+    // dot champions under --variant popcount, before any dispatch.
     const std::string_view gemv_champ(gpu.gemv_champion);
-    const bool champ_is_dot = bitnet::is_dot_kernel(gemv_champ);
-    if (!champ_is_dot || dot_variant != bitnet::DotVariant::Popcount) {
-        // Decode: real projections per layer, m=1 (one token), champion
-        // GEMV. The default is seven unfused calls; the A/B knob selects
-        // four fused calls with exactly the same total weight count.
-        const std::span<const LayerShape> decode_shapes =
-            fused_projections ? std::span<const LayerShape>(kFusedLayerShapes)
-                              : std::span<const LayerShape>(kLayerShapes);
-        const char* decode_pass = fused_projections ? "decode_fused" : "decode";
-        std::vector<SystemSite> decode_sites;
-        decode_sites.reserve(decode_shapes.size());
-        std::ranges::transform(
-            decode_shapes, std::back_inserter(decode_sites), [&](const LayerShape& ls) {
-                return make_site(backend, gpu, caps, gemv_champ, ls, 1U, dot_variant);
-            });
-        guard_negative_control(backend, decode_sites.front());
-        verify_and_time_sites(backend, decode_pass, decode_sites, decode_tokens);
-        run_system_pass(backend, decode_pass, layers, decode_tokens, decode_sites);
-    } else {
-        std::printf("system,decode: skipped (champion %s is a dot kernel; --variant "
-                    "popcount)\n",
-                    gpu.gemv_champion);
-    }
+    // Decode: real projections per layer, m=1 (one token), champion GEMV.
+    // The default is seven unfused calls; the A/B knob selects four fused
+    // calls with exactly the same total weight count.
+    const std::span<const LayerShape> decode_shapes =
+        fused_projections ? std::span<const LayerShape>(kFusedLayerShapes)
+                          : std::span<const LayerShape>(kLayerShapes);
+    const char* decode_pass = fused_projections ? "decode_fused" : "decode";
+    std::vector<SystemSite> decode_sites;
+    decode_sites.reserve(decode_shapes.size());
+    std::ranges::transform(
+        decode_shapes, std::back_inserter(decode_sites), [&](const LayerShape& ls) {
+            return make_site(backend, gpu, caps, gemv_champ, ls, 1U, dot_variant);
+        });
+    guard_negative_control(backend, decode_sites.front());
+    verify_and_time_sites(backend, decode_pass, decode_sites, decode_tokens);
+    run_system_pass(backend, decode_pass, layers, decode_tokens, decode_sites);
     // Output head: 128256x2560, ONCE per token (not per
     // layer) - its own measured row so the decode upper bound stays
     // separable from the head cost. Weights at 2 bits would be 82 MB in one

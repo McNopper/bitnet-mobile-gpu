@@ -127,6 +127,9 @@ void VulkanBackend::query_device_features() {
     }
     VkPhysicalDeviceShaderIntegerDotProductPropertiesKHR dot_props{};
     dot_props.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_INTEGER_DOT_PRODUCT_PROPERTIES_KHR;
+    VkPhysicalDeviceShaderIntegerDotProductFeaturesKHR dot_feature_query{};
+    dot_feature_query.sType =
+        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_INTEGER_DOT_PRODUCT_FEATURES_KHR;
     VkPhysicalDeviceVulkan13Features v13_query{};
     v13_query.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES;
     VkPhysicalDeviceFeatures2 features_query{};
@@ -136,8 +139,15 @@ void VulkanBackend::query_device_features() {
         features_tail->pNext = reinterpret_cast<VkBaseOutStructure*>(&item);
         features_tail = features_tail->pNext;
     };
-    append_features(dot_props);
-    append_features(v13_query);
+    if (has_dot_product_ext_ || properties_.apiVersion >= VK_API_VERSION_1_3) {
+        append_features(dot_props);
+    }
+    if (has_dot_product_ext_) {
+        append_features(dot_feature_query);
+    }
+    if (properties_.apiVersion >= VK_API_VERSION_1_3) {
+        append_features(v13_query);
+    }
     if (has_subgroup_size_control_) {
         subgroup_size_features_.sType =
             VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SUBGROUP_SIZE_CONTROL_FEATURES;
@@ -172,7 +182,12 @@ void VulkanBackend::query_device_features() {
     } else {
         get_features2_khr(physical_device_, &features_query);
     }
-    dot_product_core_ = v13_query.shaderIntegerDotProduct == VK_TRUE;
+    // Extension presence alone is not support: both the core-1.3 and KHR
+    // routes must report the optional shaderIntegerDotProduct feature.
+    dot_product_core_ =
+        (properties_.apiVersion >= VK_API_VERSION_1_3 &&
+         v13_query.shaderIntegerDotProduct == VK_TRUE) ||
+        (has_dot_product_ext_ && dot_feature_query.shaderIntegerDotProduct == VK_TRUE);
     dot_packed_signed_accelerated_ =
         dot_props.integerDotProduct4x8BitPackedSignedAccelerated == VK_TRUE;
     dot_8bit_signed_accelerated_ = dot_props.integerDotProduct8BitSignedAccelerated == VK_TRUE;
@@ -287,7 +302,7 @@ void VulkanBackend::query_cooperative_matrix_shapes() {
     caps.subgroup_size = subgroup_.subgroupSize;
     caps.subgroup_arithmetic =
         (subgroup_.supportedOperations & VK_SUBGROUP_FEATURE_ARITHMETIC_BIT) != 0;
-    caps.shader_integer_dot_product = dot_product_core_ || has_dot_product_ext_;
+    caps.shader_integer_dot_product = dot_product_core_;
     caps.dot_4x8_packed_signed_accelerated = dot_packed_signed_accelerated_;
     caps.dot_8bit_signed_accelerated = dot_8bit_signed_accelerated_;
     caps.cooperative_matrix = has_cooperative_matrix_ext_;

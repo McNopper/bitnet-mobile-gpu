@@ -8,6 +8,7 @@
 
 #include "bench/bench_support.hpp"
 
+#include "backend/caps_conformance.hpp"
 #include "backend/kernel_family.hpp"
 #include "common/format.hpp"
 
@@ -92,12 +93,7 @@ std::array<uint32_t, 3> bench_dispatch_groups(std::string_view kernel,
 // The validation layer cannot be loaded on the Android test devices, so the
 // bench checks the limit itself before every dispatch it issues.
 bool dispatch_within_limits(const std::array<uint32_t, 3>& groups, const bitnet::DeviceCaps& caps) {
-    for (size_t axis = 0; axis < groups.size(); ++axis) {
-        if (groups[axis] == 0U || groups[axis] > caps.max_workgroup_count[axis]) {
-            return false;
-        }
-    }
-    return true;
+    return bitnet::dispatch_groups_within_caps(groups, caps);
 }
 
 std::string groups_text(const std::array<uint32_t, 3>& groups) {
@@ -145,7 +141,7 @@ SiteParams pack_site(const bitnet::TernaryTensor& t, uint32_t m, uint32_t n, uin
         out.kwords = pwx.kwords;
         out.wbits = pwx.bits;
         out.abits = pa.bits;
-        out.wbytes = pw.bytes();
+        out.wbytes = pwx.bytes();
         out.abytes = pa.bytes();
     }
     return out;

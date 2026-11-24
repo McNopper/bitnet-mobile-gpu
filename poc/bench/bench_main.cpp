@@ -48,6 +48,7 @@
 #include <span>
 #include <stdexcept>
 #include <string>
+#include <utility>
 #include <vector>
 
 #ifndef BITNET_SPV_DIR
@@ -232,6 +233,8 @@ struct RowResult {
     RowStatus status = RowStatus::Timed;
     bitnet::BenchStats stats{};
     std::array<uint32_t, 3> groups{};
+    uint32_t kwords = 0;
+    uint32_t mode = 0;
 };
 
 RowResult bench_shape(bitnet::IComputeBackend& backend, const bitnet::GpuProfile& gpu,
@@ -244,6 +247,8 @@ RowResult bench_shape(bitnet::IComputeBackend& backend, const bitnet::GpuProfile
     const BenchBuffers bufs = pack_bench_buffers(backend, s, t);
     RowResult row;
     row.groups = bench_dispatch_groups(kernel_sv, gpu, s.m, s.n, bufs.kwords);
+    row.kwords = bufs.kwords;
+    row.mode = kernel_param_mode(kernel_sv, bufs.mode);
     if (!dispatch_within_limits(row.groups, caps)) {
         row.status = RowStatus::OutsideLimits;
         return row;
@@ -257,8 +262,7 @@ RowResult bench_shape(bitnet::IComputeBackend& backend, const bitnet::GpuProfile
     auto* kernel = backend.load_kernel(
         {.name = bitnet::dot_module_name(s.kernel, dot_variant), .numthreads = {expect, 1, 1}});
     // mode: ksplit K-slice width, coop-mat padded M (bufs.mode), else 0.
-    const bitnet::KernelParams params{
-        .m = s.m, .n = s.n, .kwords = bufs.kwords, .mode = kernel_param_mode(kernel_sv, bufs.mode)};
+    const bitnet::KernelParams params{.m = s.m, .n = s.n, .kwords = row.kwords, .mode = row.mode};
     backend.bind(bufs.wbuf.get(), bufs.abuf.get(), obuf.get());
     backend.set_params(&params, sizeof(params));
 
@@ -560,8 +564,8 @@ bool print_row(const BenchShape& shape, const RowResult& row, const bitnet::Devi
                              static_cast<double>(shape.m) * shape.k +
                              static_cast<double>(shape.m) * shape.n * bitnet::kInt32Bytes;
     const double ideal_ms = ideal_bytes / kBytesPerGB / (ceiling / kMsPerSecond);
-    std::printf("%s,%u,%u,%u,0,%u,%.4f,%.4f,%.4f,%.0f,%.3f,%.4f\n", shape.kernel, shape.m, shape.n,
-                bitnet::kwords_for(shape.k), shape.iters, row.stats.avg_ms, row.stats.min_ms,
+    std::printf("%s,%u,%u,%u,%u,%u,%.4f,%.4f,%.4f,%.0f,%.3f,%.4f\n", shape.kernel, shape.m, shape.n,
+                row.kwords, row.mode, shape.iters, row.stats.avg_ms, row.stats.min_ms,
                 row.stats.p90_ms, bytes, gb_per_s(bytes, row.stats.avg_ms), ideal_ms);
     return true;
 }
@@ -683,7 +687,7 @@ void print_timing_line(const char* probe, const bitnet::BenchStats& stats, uint3
                 probe, iters, stats.avg_ms, stats.min_ms, stats.p90_ms);
 }
 
-void run_probes(bitnet::IComputeBackend& backend) {
+uint32_t run_probes(bitnet::IComputeBackend& backend) {
     // Achievable read bandwidth: 64 MB of uint4, 16384 threads.
     const uint32_t elems = kProbeElements;
     const uint32_t threads = kProbeTotalThreads;
@@ -731,6 +735,7 @@ void run_probes(bitnet::IComputeBackend& backend) {
     print_timing_line("null_probe", nulls, kProbeIters, verdict.state);
     print_timing_line("bw_probe", bw, kProbeIters, verdict.state);
     print_timing_line("stream_bw_probe", stream, kProbeIters, verdict.state);
+    return vec_bad;
 }
 
 } // namespace
@@ -755,6 +760,7 @@ int main(int argc, char** argv) {
 // complexity).
 struct BenchArgs {
     std::string spv_dir = BITNET_SPV_DIR;
+    std::string profile; // explicit generated profile for tuning sweeps
     uint32_t iters_override = 0;
     bool skip_probe = false;
     std::string only_kernel;
@@ -799,6 +805,8 @@ BenchArgs parse_bench_args(int argc, char** argv) {
         const std::string arg = argv[i];
         if (arg == "--spv-dir" && i + 1 < argc) {
             args.spv_dir = argv[++i];
+        } else if (arg == "--profile" && i + 1 < argc) {
+            args.profile = argv[++i];
         } else if (arg == "--iters" && i + 1 < argc) {
             args.iters_override = static_cast<uint32_t>(std::stoul(argv[++i]));
         } else if (arg == "--skip-probe") {
@@ -842,6 +850,34 @@ static bool system_champions_filled(const bitnet::GpuProfile& gpu) {
     return false;
 }
 
+// The system pass supports the ordinary storage-buffer core kernels only.
+// Experimental image/coopmat kernels need different bindings and gates;
+// dot champions cannot be used in a popcount-only run.
+static bool system_champions_supported(const bitnet::GpuProfile& gpu,
+                                       bitnet::DotVariant dot_variant) {
+    const std::array<std::pair<const char*, const char*>, 2> champions{{
+        {"decode", gpu.gemv_champion},
+        {"prefill", gpu.gemm_champion},
+    }};
+    return std::ranges::all_of(champions, [dot_variant](const auto& champion) {
+        const auto& [role, name] = champion;
+        const std::string_view kernel(name);
+        if (bitnet::is_microtile_kernel(kernel) || bitnet::is_coopmat_kernel(kernel)) {
+            std::printf("FATAL: --system %s champion '%s' is experimental and has no "
+                        "storage-buffer system path\n",
+                        role, name);
+            return false;
+        }
+        if (dot_variant == bitnet::DotVariant::Popcount && bitnet::is_dot_kernel(kernel)) {
+            std::printf("FATAL: --system %s champion '%s' is a dot kernel, but --variant "
+                        "popcount disables the dot family\n",
+                        role, name);
+            return false;
+        }
+        return true;
+    });
+}
+
 // Sweep-override application (--tile-m/--tile-n/--tile-threads probe knob
 // combos; extracted from run_bench for the cognitive-complexity gate): the
 // SPIR-V must be compiled with the SAME defines (CMakeLists sweep profiles).
@@ -855,6 +891,19 @@ static void apply_tile_overrides(bitnet::GpuProfile& gpu, const BenchArgs& args)
     if (args.tile_override_threads != 0U) {
         gpu.gemm_tile_threads = args.tile_override_threads;
     }
+}
+
+static bool apply_profile_override(bitnet::GpuProfile& gpu, const BenchArgs& args) {
+    if (args.profile.empty()) {
+        return true;
+    }
+    const auto* selected = bitnet::gpu_profile_named(args.profile);
+    if (selected == nullptr) {
+        std::printf("FATAL: unknown --profile '%s'\n", args.profile.c_str());
+        return false;
+    }
+    gpu = *selected;
+    return true;
 }
 
 // Champion overrides (--decode-champion / --prefill-champion): system-level
@@ -913,12 +962,12 @@ static int run_matrix_mode(bitnet::IComputeBackend& backend, const bitnet::GpuPr
                            const BenchArgs& args) {
     const int oracle_failures =
         run_shape_matrix(backend, gpu, caps, dot_variant, args.only_kernel, args.iters_override);
-    if (!args.skip_probe) {
-        run_probes(backend);
-    }
+    const uint32_t probe_failures = args.skip_probe ? 0U : run_probes(backend);
     print_validation_line(backend);
-    if (oracle_failures != 0) {
-        std::printf("FAIL: %d bench row(s) did not reproduce the CPU oracle\n", oracle_failures);
+    if (oracle_failures != 0 || probe_failures != 0U) {
+        std::printf(
+            "FAIL: %d bench row(s) did not reproduce the CPU oracle; %u probe mismatch(es)\n",
+            oracle_failures, probe_failures);
         return 1;
     }
     return 0;
@@ -944,6 +993,9 @@ static int run_bench(int argc, char** argv) {
         // dispatch knobs (v7 geometry, v6 rows-per-group) come ONLY from the
         // generated table - there is no host-side override for them.
         bitnet::GpuProfile gpu = *bitnet::gpu_profile_for_device(caps.device_name);
+        if (!apply_profile_override(gpu, args)) {
+            return 2;
+        }
         apply_tile_overrides(gpu, args);
         if (!apply_champion_overrides(gpu, args)) {
             return 2;
@@ -1028,7 +1080,7 @@ static int run_bench(int argc, char** argv) {
         }
 
         if (args.system_mode) {
-            if (!system_champions_filled(gpu)) {
+            if (!system_champions_filled(gpu) || !system_champions_supported(gpu, dot_variant)) {
                 return 2;
             }
             std::printf("# system: fused_projections=%u decode_only=%u\n",

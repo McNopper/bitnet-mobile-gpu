@@ -38,6 +38,7 @@
 #include <numeric>
 #include <random>
 #include <sstream>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -81,8 +82,17 @@ namespace {
 constexpr uint32_t kV1GroupThreads = 64;
 constexpr uint32_t kV2GroupThreads = 256;
 constexpr uint32_t kV1GemmTile = 16;
-constexpr uint32_t kDescThreads = 64; // load_kernel numthreads description
 constexpr int32_t kMaxMismatchPrints = 5;
+
+void require_dispatch_within_limits(const std::array<uint32_t, 3>& groups,
+                                    bitnet::IComputeBackend& backend, const std::string& kernel) {
+    const auto caps = backend.probe_caps();
+    if (!bitnet::dispatch_groups_within_caps(groups, caps)) {
+        throw std::runtime_error("dispatch " + std::to_string(groups[0]) + "/" +
+                                 std::to_string(groups[1]) + "/" + std::to_string(groups[2]) +
+                                 " of " + kernel + " is outside maxComputeWorkGroupCount");
+    }
+}
 
 constexpr std::array<Shape, 20> kShapes = {{
     // gemv (decode path, M=1)
@@ -276,9 +286,9 @@ static Variant v5_variant_for(const Shape& s, const bitnet::GpuProfile* gpu, uin
 // mismatches here; zero mismatches means it is blind to unwritten outputs.
 // Returns the mismatch count, or -1 after reporting a blind harness.
 static int64_t run_negative_control(const Variant& ctrl, const bitnet::KernelParams& params,
-                                    bitnet::IComputeBackend* backend, bitnet::IBuffer* wbuf,
-                                    bitnet::IBuffer* abuf, bitnet::IBuffer* obuf,
-                                    std::vector<int32_t>& gpu_out,
+                                    const bitnet::GpuProfile* gpu, bitnet::IComputeBackend* backend,
+                                    bitnet::IBuffer* wbuf, bitnet::IBuffer* abuf,
+                                    bitnet::IBuffer* obuf, std::vector<int32_t>& gpu_out,
                                     const std::vector<int32_t>& ref) {
     std::memset(obuf->mapped(), 0x5A, gpu_out.size() * sizeof(int32_t));
     Variant half = ctrl;
@@ -286,7 +296,9 @@ static int64_t run_negative_control(const Variant& ctrl, const bitnet::KernelPar
     if (half.groups[0] == 0U) {
         half.groups[0] = 1U;
     }
-    auto* kernel = backend->load_kernel({.name = half.name, .numthreads = {kDescThreads, 1, 1}});
+    require_dispatch_within_limits(half.groups, *backend, half.name);
+    const uint32_t expect = bitnet::expected_local_size(half.name, *gpu);
+    auto* kernel = backend->load_kernel({.name = half.name, .numthreads = {expect, 1, 1}});
     backend->bind(wbuf, abuf, obuf);
     backend->set_params(&params, sizeof(params));
     bitnet::IComputeBackend::Dispatch d;
@@ -316,6 +328,7 @@ static int64_t run_negative_control(const Variant& ctrl, const bitnet::KernelPar
 // each dispatch family (lane 0 = GEMV, lane 1 = GEMM) and
 // remembers the verdict. Returns 0 (validated) or -1 (blind harness).
 static int64_t run_negative_control_once(const Variant& ctrl, const bitnet::KernelParams& params,
+                                         const bitnet::GpuProfile* gpu,
                                          bitnet::IComputeBackend* backend, bitnet::IBuffer* wbuf,
                                          bitnet::IBuffer* abuf, bitnet::IBuffer* obuf,
                                          std::vector<int32_t>& gpu_out,
@@ -326,7 +339,7 @@ static int64_t run_negative_control_once(const Variant& ctrl, const bitnet::Kern
     }
     done[lane] = true;
     const int64_t mismatches =
-        run_negative_control(ctrl, params, backend, wbuf, abuf, obuf, gpu_out, ref);
+        run_negative_control(ctrl, params, gpu, backend, wbuf, abuf, obuf, gpu_out, ref);
     if (mismatches == 0) {
         std::printf("  NEGATIVE CONTROL FAILED: under-dispatched %s matched the "
                     "reference - this harness is blind to unwritten outputs\n",
@@ -376,6 +389,7 @@ int64_t run_and_compare_variant(const Variant& variant, const bitnet::GpuProfile
                                 bitnet::IBuffer* ab, bitnet::IBuffer* out,
                                 const bitnet::KernelParams& base, std::vector<int32_t>& gpu_out,
                                 const std::vector<int32_t>& ref, void* binding_override) {
+    require_dispatch_within_limits(variant.groups, backend, variant.name);
     const uint32_t expect = bitnet::expected_local_size(variant.name, *gpu);
     auto* kernel = backend.load_kernel({.name = variant.name, .numthreads = {expect, 1, 1}});
     const bitnet::KernelParams kernel_params{.m = base.m,
@@ -383,14 +397,15 @@ int64_t run_and_compare_variant(const Variant& variant, const bitnet::GpuProfile
                                              .kwords = variant.kwords != 0U ? variant.kwords
                                                                             : base.kwords,
                                              .mode = variant.mode};
+    // Every variant must write the output it claims: accumulating K-split
+    // kernels start at zero; all others start from a sentinel so a no-op or
+    // under-dispatch cannot reuse the previous variant's correct output.
+    std::memset(out->mapped(), variant.needs_zero ? 0 : 0x5A, gpu_out.size() * sizeof(int32_t));
     int64_t mismatches = 0;
     if (binding_override == nullptr) {
         // Sticky-bind path: one command buffer, one submit + fence.
         backend.bind(wb, ab, out);
         backend.set_params(&kernel_params, sizeof(kernel_params));
-        if (variant.needs_zero) {
-            std::memset(out->mapped(), 0, gpu_out.size() * sizeof(int32_t));
-        }
         bitnet::IComputeBackend::Dispatch d;
         d.kernel = kernel;
         d.groups[0] = variant.groups[0];
@@ -426,7 +441,7 @@ int64_t run_and_compare_variant(const Variant& variant, const bitnet::GpuProfile
 
 // Extreme / zero / signed-binary tensors: deterministic vectors
 // the seeded random generator cannot produce. Compare path identical to the
-// random shapes (pack roundtrip, CPU oracle, every core kernel bit-exact).
+// random shapes (pack roundtrip, CPU oracle, every applicable core kernel bit-exact).
 static void fill_checkerboard_weights(bitnet::TernaryTensor& t, const Shape& s) {
     for (uint32_t r = 0; r < s.n; ++r) {
         for (uint32_t j = 0; j < s.k; ++j) {
@@ -534,9 +549,8 @@ int64_t compare_tensor(const Shape& s, const bitnet::TernaryTensor& t,
     Variant v2il = sv.v2;
     v2il.name = "gemv_bitplane_ksplit_il";
     const auto packed_il = bitnet::repack_interleaved16(packed_w);
-    // The interleaved buffer pads rows to a multiple of 16: use the real
-    // bit-vector size, not PackedTernary::bytes() (unpadded rows).
-    const std::size_t il_bytes = packed_il.bits.size() * sizeof(uint32_t);
+    // The interleaved buffer's byte count includes tail-block padding rows.
+    const uint64_t il_bytes = packed_il.bytes();
     auto wbuf_il = backend->create_buffer(il_bytes, true);
     std::memcpy(wbuf_il->mapped(), packed_il.bits.data(), il_bytes);
 
@@ -591,8 +605,9 @@ int64_t compare_tensor(const Shape& s, const bitnet::TernaryTensor& t,
     // Negative control (once per family): the harness must SEE unwritten
     // outputs - see run_negative_control_once above. Lane 0 (GEMV) fires
     // on the first shape, lane 1 (GEMM) on the first m>1 shape.
-    if (int64_t nc = run_negative_control_once(sv.v1, params, backend.get(), wbuf.get(), abuf.get(),
-                                               obuf.get(), gpu_out, ref, s.m > 1 ? 1 : 0);
+    if (int64_t nc =
+            run_negative_control_once(sv.v1, params, gpu, backend.get(), wbuf.get(), abuf.get(),
+                                      obuf.get(), gpu_out, ref, s.m > 1 ? 1 : 0);
         nc != 0) {
         return nc;
     }
@@ -866,7 +881,7 @@ static int run_tests(int argc, char** argv) {
     failed += run_shape_suite(args);
 
     // Known-answer golden vector: hand-computed values through
-    // every core kernel, with the committed file cross-checked (GPU only).
+    // every applicable core kernel, with the committed file cross-checked (GPU only).
     if (!args.cpu_only) {
         failed += run_golden_vector_test(args.golden);
     }

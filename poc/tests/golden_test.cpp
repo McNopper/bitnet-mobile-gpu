@@ -176,7 +176,7 @@ static bool golden_file_matches(const std::string& path, const GoldenData& g) {
 }
 
 // Step 3: every core GPU kernel must emit the hand-computed values (the
-// shared compare_tensor path dispatches every core kernel and compares bit-exactly
+// shared compare_tensor path dispatches every applicable core kernel and compares bit-exactly
 // against the oracle; the oracle is proven equal to the hand values in
 // step 1, and the GPU outputs are additionally compared against them).
 static bool golden_gpu_matches(const GoldenData& g) {
@@ -237,7 +237,7 @@ int run_golden_vector_test(const std::string& golden_path) {
     }
     std::printf("\n  expected per output: %+d / %+d (alternating)\n", golden_out(0), golden_out(1));
     if (ok) {
-        std::printf("  PASS (golden: file + oracle + every core kernel bit-exact)\n");
+        std::printf("  PASS (golden: file + oracle + every applicable core kernel bit-exact)\n");
         return 0;
     }
     return 1;

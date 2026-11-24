@@ -1,7 +1,7 @@
 # scripts/ — build, run, verify
 
-Four scripts, run from the folder root; every script fails loudly (non-zero
-exit on error).
+Four scripts, run from the folder root; build, push and run failures return
+a non-zero exit (device-state probes are explicitly best-effort).
 
 | Script | Purpose |
 | --- | --- |
