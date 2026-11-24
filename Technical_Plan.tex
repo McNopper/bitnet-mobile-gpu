@@ -105,7 +105,7 @@
 \makeatother
 \subtitle{Technical plan and proof of concept}
 \author{Norbert Nopper}
-\date{2026-11-18}
+\date{2026-11-24}
 
 % In-source figures: the llama.cpp stack, the PoC architecture and the
 % UML class diagram are TikZ pictures in this one file - no external image
@@ -160,7 +160,7 @@ proof of concept; its source and scripts are in \texttt{poc/} and
 \texttt{scripts/}. The public \texttt{microsoft/bitnet-b1.58-2B-4T}
 checkpoint [3] is the model under test (\S{}8).
 
-\textbf{What exists.} A Vulkan compute PoC with eleven ternary
+\textbf{What exists.} A Vulkan compute PoC with twelve ternary
 matrix-multiplication kernels, written in Slang, compiled to SPIR-V and
 verified by integer equality against a CPU oracle on four GPUs from
 three vendors (NVIDIA RTX 5070, Arm Mali-G57 and Mali-G52, Qualcomm
@@ -184,8 +184,8 @@ Correctness & every kernel reproduces the CPU oracle exactly on all four
 GPUs: 20 synthetic shapes, a hand-computed known-answer vector, a real
 model layer and a full BitLinear forward; Vulkan validation layer: 0
 messages (desktop) \\
-GPU PoC, decode (linear layers only, upper bound) & 1.74 tokens/s
-(Mali-G57), 4.50 (Mali-G52), 23.0 (Adreno 740) \\
+GPU PoC, decode (linear layers only, upper bound) & 2.20 tokens/s
+(Mali-G57), 6.62 (Mali-G52), 42.8 (Adreno 740) \\
 CPU, llama.cpp, complete model & 2.56 tokens/s (Mali-G57 tablet), 20.8
 (Adreno 740 headset); on the Mali-G52 tablet (2.42 GiB of memory) the
 1.2 GB model file produces no result, with a re-encoded output head
@@ -208,8 +208,9 @@ head is the largest lever and is measured (\S{}5, \S{}7). (3) The GPU
 reads memory more slowly than the CPU on all three devices, so a GPU
 decode path with the same bytes per token has the lower bound. Where a
 GPU path can still pay off is derived per device from the measured
-bounds (\S{}3.5): prompt processing on the Adreno 740 class, and
-possibly energy, which is not yet measured. (4) Every GPU claim in the
+bounds (\S{}3.5): decode and prompt processing on the Adreno 740 class
+(after the optimizations of \S{}5.3), and possibly energy, which is not
+yet measured. (4) Every GPU claim in the
 plan is gated by a measured CPU baseline on the same device.
 
 \section{1. Kernel design for 1.58-bit weights on mobile GPUs}\label{kernel-design-for-1.58-bit-weights-on-mobile-gpus}
@@ -475,7 +476,7 @@ measured \\
   (about 2 s on Adreno 740) and batched above the per-submission floor
   (0.2-0.4 ms, \S{}5).
 \item
-  \textbf{Apple.} No Apple hardware was available. All eleven kernels
+  \textbf{Apple.} No Apple hardware was available. All twelve kernels
   and the probes compile from the same Slang source to Metal Shading
   Language (\texttt{popcount}, \texttt{threadgroup} arrays and atomics
   are emitted); none was executed.\ llama.cpp already ships Metal kernels
@@ -485,8 +486,9 @@ measured \\
 \section{2. Extending llama.cpp}\label{extending-llama.cpp}
 
 All statements about llama.cpp were read from the source tree at commit
-\texttt{e0949d09b130} [14] and re-checked for the three gaps on
-master \texttt{82503b42fa39} (2026-11-13).
+\texttt{e0949d09b130} [14], re-checked for the three gaps on
+master \texttt{82503b42fa39} (2026-11-13), and re-verified at release
+v1.0.0 (2026-11-13): the three gaps are open in all three versions.
 
 \begin{figure}[t]
 \centering
@@ -607,7 +609,7 @@ per-device backend defaults (\S{}6) \\
 \textbf{The three correctness gaps are measured.} The converter fixes
 were needed to produce the GGUF at all. The graph defect does not stop
 the model from running: it runs at full speed with the wrong activation
-function. On the same 16 chunks of WikiText-2 [20]:
+function. All three gaps are still open at release v1.0.0. On the same 16 chunks of WikiText-2 [20]:
 
 {\def\LTcaptype{none} % do not increment counter
 \begin{longtable}[]{@{}
@@ -931,8 +933,9 @@ bandwidth / 0.807 GB per token) & $\geq$ 3.1; CPU measures 3.58 & $\geq$ 8.7; CP
 measures 5.56 & $\geq$ 27.2; CPU measures 28.8 \\
 GPU decode replaces CPU decode: $\geq$ 1.2x CPU, limited by GPU read
 bandwidth / bytes per token and by the arithmetic roof & 4.3 needed;
-bounds 3.7 (memory) and 1.97 (arithmetic): not reachable & 6.7 needed,
-bound 8.0; PoC 4.50 & 34.6 needed, bound 34.1: no margin \\
+bounds 3.7 (memory) and 1.97 (arithmetic): not reachable; PoC 2.20 &
+6.7 needed, bound 8.0; PoC 6.62 (1.19x CPU) & 34.6 needed; PoC 42.8 on
+linear-layer bytes, an upper bound that passes at 1.49x CPU \\
 GPU prompt processing replaces the CPU:\@ $\geq$ 1.2x CPU, limited by the
 arithmetic roof & 9.6 needed, roof 1.97: not reachable with this
 arithmetic & 12.6 needed, roof 13.4; PoC 5.73 & 64.2 needed, roof 69.8;
@@ -1036,11 +1039,11 @@ ms per 64 tokens
 \endhead%
 \bottomrule\noalign{}
 \endlastfoot%
-Mali-G57 & \texttt{gemv\_plane\_rowcoop} & 573 (684) &
+Mali-G57 & \texttt{gemv\_plane\_rowcoop} & 455 (684) &
 \texttt{gemm\_bitplane\_naive} & 32,353 \\
-Mali-G52 & \texttt{gemv\_plane\_rowcoop} & 222 (300) &
+Mali-G52 & \texttt{gemv\_plane\_rowcoop} & 151 (300) &
 \texttt{gemm\_plane\_tiled} & 11,178 \\
-Adreno 740 & \texttt{gemv\_bitplane\_ksplit} & 43.5 (46.5) &
+Adreno 740 & \texttt{gemv\_bitplane\_ksplit\_il} & 23.4 (43.4) &
 \texttt{gemm\_bitplane\_naive} & 1,040 \\
 \end{longtable}
 }
@@ -1060,7 +1063,7 @@ Per token, decode & Mali-G57 & Mali-G52 & Adreno 740 \\
 \endhead%
 \bottomrule\noalign{}
 \endlastfoot%
-measured (ms) & 573 & 222 & 43.5 \\
+measured (ms) & 455 & 151 & 23.4 \\
 arithmetic alone, no memory (ms) & 508 & 74.6 & 14.3 \\
 weights alone at the GPU read roof (ms) & 176 & 80.7 & 18.9 \\
 \textbf{Per 64-token block, prompt} & & & \\
@@ -1069,11 +1072,15 @@ arithmetic alone (ms) & 32,503 & 4,772 & 917 \\
 \end{longtable}
 }
 
-On the single-core Mali-G57 both roles sit on the arithmetic roof of the
-bit-plane method: no memory layout can make these kernels faster there,
-only fewer operations per weight. On Adreno 740 prompt processing is
-within 13\% of that roof, while decode is 2.3x above the higher of its
-two roofs. On Mali-G52 both roles are 2.3-2.8x above the roofs ---
+On the single-core Mali-G57 decode runs 455 ms against an arithmetic
+probe of 508 ms: the probe overestimates the arithmetic cost of the
+kernel's own configuration (256 threads, no memory traffic), so it is a
+model, not a floor --- and no memory layout can beat it there by more
+than the difference, only fewer operations per weight could. On Adreno
+740 prompt processing is within 13\% of that roof, and after the
+interleaved-16 layout decode is 1.24x above the higher of its two roofs
+(was 2.3x). On Mali-G52 decode is 1.87x above the higher roof (was
+2.3-2.8x) after the rows-per-group change; the remaining distance is
 kernel overhead still to be removed.
 
 \subsection{5.3 Strategies employed, in order of measured
@@ -1106,6 +1113,23 @@ leverage}\label{strategies-employed-in-order-of-measured-leverage}
   loads per 64 weights) gives the fastest decode kernel on both Mali
   GPUs.
 \item
+  \textbf{Workgroup sizing for decode.} More output rows per workgroup
+  (fewer, fatter workgroups) removes per-workgroup overhead. Measured
+  2026-11-24 at rows-per-group 8 against 1: Mali-G52 decode 151 against
+  222 ms/token (ABBA, -31 to -34\% in both orders), Mali-G57 455 against
+  573 (-20.5\%), the output head -35\% and -24\%. The curve turns at 8
+  (16 is worse); the G52 gap to its roof falls from 2.75x to 1.87x.
+\item
+  \textbf{Row interleaving for coalesced reads.} Weights repacked in
+  blocks of 16 rows so that a workgroup whose threads own consecutive
+  rows reads 16 contiguous words per plane per step (interleaved-16,
+  \texttt{format.hpp} \texttt{repack\_interleaved16}). Measured on the
+  Adreno 740, where each thread owns a different output row: decode 23.4
+  against 43.4 ms/token (ABBA, -45 to -47\% in both orders), output head
+  2.9 against 7.4 ms (-60\%). The oracle pins the permutation: the
+  repack is lossless and the kernel is bit-exact on all four GPUs and
+  every shape of the harness (167 checks).
+\item
   \textbf{One submission per token, not per call.} Batching the 210
   calls of a token makes decode 1.7x (Mali-G57), 2.8x (Mali-G52) and
   3.2x (Adreno 740) faster than one submission per call. Two effects are
@@ -1131,6 +1155,44 @@ register micro-tiles and a texture-fetch weight path (experimental
 kernels, disabled by default). The cooperative-matrix kernel is
 disabled: the Slang compiler emits incorrect SPIR-V for int8 cooperative
 matrices, which the oracle caught and the validation layer could not.
+
+The optimization round of 2026-11-24 rejected four further approaches
+with measurements:
+
+\begin{itemize}
+\tightlist%
+\item
+  \textbf{FP32-FMA formulation.} Ternary matmul has no multiply to
+  accelerate: $w\in\{-1,0,+1\}$ turns $acc \mathrel{+}= w\cdot a$ into a
+  conditional add, and the probe's SPIR-V shows exactly that (one fused
+  multiply-add in the whole shader, the rest selects and integer adds).
+  A per-weight FP32 formulation therefore costs a sign-select plus an
+  add per weight --- more operations per weight than the AND + popcount
+  bit-parallel method. The earlier probe timings were the compiler
+  folding the selects, not an FMA-pipeline win.
+\item
+  \textbf{Shuffle reductions and fewer atomics.} The serial groupshared
+  reduction of the cooperative kernels is 16 adds against about 350
+  operations per thread --- negligible. A workgroup-level atomic
+  reduction for the K-split kernel failed the oracle instead: in that
+  decomposition each thread owns a different output row, so the
+  per-thread \texttt{InterlockedAdd} is required, not overhead. It is
+  what lets the 128,256-row head fit under the 65,535-workgroup limit.
+\item
+  \textbf{K-loop partial unrolling.} A $\times$4 unroll of the decode
+  kernel changed nothing: Mali-G52 225 against 219 ms/token (3\%
+  worse), Mali-G57 456 against 460 (within noise). Loop overhead is not
+  the bottleneck.
+\item
+  \textbf{Cross-layer prefetch and pipelining.} The batched whole-system
+  pass shows a negative batching overhead on every device: the sync
+  cost is already removed and kernel work dominates. On the
+  memory-bound devices there is no idle compute to hide the next
+  layer's reads under; on the compute-bound Mali-G57 a second queue
+  could in principle hide up to 176 ms of weight reads, but the same
+  scheduling change is what the batched submission already buys.
+  Evaluated on the measurements; not pursued.
+\end{itemize}
 
 \section{6. Success criteria and evaluation
 benchmarks}\label{success-criteria-and-evaluation-benchmarks}
@@ -1269,10 +1331,10 @@ CPU prompt
 \endhead%
 \bottomrule\noalign{}
 \endlastfoot%
-Mali-G57 MC1, 8\texttimes{} Cortex-A55 & 1.74 & 2.56 & 3.58 & 1.98 & 7.96 \\
-Mali-G52 MP2, 2\texttimes{} A75 + 6\texttimes{} A55 & 4.50 & no result & 5.56 & 5.73 & 10.5
+Mali-G57 MC1, 8\texttimes{} Cortex-A55 & 2.20 & 2.56 & 3.58 & 1.98 & 7.96 \\
+Mali-G52 MP2, 2\texttimes{} A75 + 6\texttimes{} A55 & 6.62 & no result & 5.56 & 5.73 & 10.5
 (Q6\_K head) \\
-Adreno 740, 6\texttimes{} Cortex-A78C & 23.0 & 20.8 & 28.8 & 61.5 & 53.5 \\
+Adreno 740, 6\texttimes{} Cortex-A78C & 42.8 & 20.8 & 28.8 & 61.5 & 53.5 \\
 \end{longtable}
 }
 
@@ -1281,12 +1343,25 @@ dot-product instructions raised prompt processing by 16\% (tablet) and
 40\% (headset) over the default build of the NDK.\@ The graph fix of \S{}2.2
 does not change speed (21.1 against 20.8 tokens/s decode on the
 headset). The thread count: on the Mali-G52 tablet decode peaks at four
-threads and collapses at eight (1.1 tokens/s).
+threads and collapses at eight (1.1 tokens/s). That collapse is not the
+memory system: pinned to the two Cortex-A75 cores the CPU read roof is
+8.38 GB/s with one thread (6.38 on an A55), and eight threads give the
+highest total of all (9.36 GB/s) --- the ceiling is the memory system
+(~9.4 GB/s either way), so affinity alone cannot close the CPU path's
+48\%-of-bound gap, and the eight-thread collapse lives in the threading,
+not in the cores.
 
-\textbf{Today the GPU kernels do not pass the ship rule on any measured
-device.} On these devices the CPU is the stronger decode backend; a GPU
-path pays off only where the bounds of \S{}3.5 allow it, which is prompt
-processing on the Adreno 740 class.
+\textbf{The ship rule now passes on the Adreno 740 class for decode.}
+After the workgroup-sizing and interleaved-layout optimizations of
+2026-11-24, the GPU linear-layers upper bound is 42.8 tokens/s against
+28.8 for the tuned CPU path on the same device (1.49x). It is an upper
+bound: the PoC measures linear layers only, without attention,
+normalization and sampling, so the full-model GPU number is not
+measured. On the two Mali devices the GPU upper bound stays below the
+CPU rate (6.62 against 5.56 on the G52, 1.19x; 2.20 against 3.58 on the
+G57). The CPU remains the shipping decode path everywhere today, and a
+GPU path pays off where the bounds of \S{}3.5 allow it: decode on the
+Adreno 740 class and prompt processing there as well.
 
 \section{7. Hardware constraints; low power, memory bandwidth, compute
 overhead}\label{hardware-constraints-low-power-memory-bandwidth-compute-overhead}
@@ -1575,9 +1650,9 @@ comparison \\
 \end{longtable}
 }
 
-\textbf{Result:} \texttt{ALL\ TESTS\ PASSED} on the four GPUs, 111
-kernel \texttimes{} shape checks each plus the known-answer, real-weight and
-BitLinear cases.
+\textbf{Result:} \texttt{ALL\ TESTS\ PASSED} on the four GPUs, 144
+kernel \texttimes{} shape checks each plus 23 known-answer, real-weight
+and BitLinear checks.
 
 {\def\LTcaptype{none} % do not increment counter
 \begin{longtable}[]{@{}
@@ -1736,7 +1811,8 @@ compile-time strategy interface and the test harness}
 \item
   llama.cpp, \url{https://github.com/ggml-org/llama.cpp}, commits
   \texttt{e0949d09b130} (source reading), \texttt{93cf736a8d1d} (CPU
-  reference builds), \texttt{82503b42fa39} (gap re-check); pull requests
+  reference builds), \texttt{82503b42fa39} (gap re-check), and release
+  v1.0.0 (re-verification of the statements of \S{}2); pull requests
   \#7931 (BitNet architecture), \#8151
   (\texttt{TQ1\_0}/\texttt{TQ2\_0}), \#12135 (Vulkan integer dot path);
   \texttt{CONTRIBUTING.md}.

@@ -199,6 +199,21 @@ void test_bitnet1_rejects_corrupt() {
     std::remove(path.c_str());
 }
 
+void test_interleaved16_roundtrip() {
+    // n=5 rows (not a multiple of 16), k=65 (not a multiple of 32): the
+    // interleaved-16 repack must be lossless, including the padding.
+    constexpr uint32_t n = 5;
+    constexpr uint32_t k = 65;
+    std::vector<int8_t> w(static_cast<size_t>(n) * k);
+    for (uint32_t i = 0; i < w.size(); ++i) {
+        w[i] = static_cast<int8_t>((static_cast<int>(i) % 3) - 1); // -1, 0, +1
+    }
+    const auto packed = bitnet::PackedTernary::pack(w.data(), n, k);
+    const auto interleaved = bitnet::repack_interleaved16(packed);
+    const auto back = bitnet::unpack_interleaved16(interleaved);
+    CHECK(back == w);
+}
+
 void test_v6_units_for() {
     CHECK(bitnet::v6_units_for(1) == 1);
     CHECK(bitnet::v6_units_for(63) == 1);
@@ -361,6 +376,7 @@ int main() {
         test_version_decode();
         test_bitnet1_roundtrip();
         test_bitnet1_rejects_corrupt();
+        test_interleaved16_roundtrip();
         test_v6_units_for();
         test_v6_ternary_layout();
         test_v6_ternary_roundtrip();

@@ -46,6 +46,63 @@ std::vector<int8_t> PackedTernary::unpack() const {
     return out;
 }
 
+PackedTernary repack_interleaved16(const PackedTernary& src) {
+    constexpr uint32_t blockRows = 16;
+    const uint32_t blocks = (src.rows + blockRows - 1) / blockRows;
+    PackedTernary out = src;
+    out.bits.assign(static_cast<size_t>(blocks) * 2 * src.kwords * blockRows, 0U);
+    for (uint32_t b = 0; b < blocks; ++b) {
+        for (uint32_t r = 0; r < blockRows; ++r) {
+            const uint32_t row = b * blockRows + r;
+            if (row >= src.rows) {
+                break; // tail block: padding rows stay zero on both planes
+            }
+            const uint32_t* plane0 = &src.bits[static_cast<size_t>(row) * 2 * src.kwords];
+            const uint32_t* plane1 = plane0 + src.kwords;
+            for (uint32_t w = 0; w < src.kwords; ++w) {
+                out.bits[static_cast<size_t>(b) * 2 * src.kwords * blockRows +
+                         static_cast<size_t>(w) * blockRows + r] = plane0[w];
+                out.bits[static_cast<size_t>(b) * 2 * src.kwords * blockRows +
+                         static_cast<size_t>(src.kwords) * blockRows +
+                         static_cast<size_t>(w) * blockRows + r] = plane1[w];
+            }
+        }
+    }
+    return out;
+}
+
+std::vector<int8_t> unpack_interleaved16(const PackedTernary& src) {
+    constexpr uint32_t blockRows = 16;
+    const uint32_t blocks = (src.rows + blockRows - 1) / blockRows;
+    std::vector<int8_t> out(static_cast<size_t>(src.rows) * src.cols, 0);
+    for (uint32_t b = 0; b < blocks; ++b) {
+        for (uint32_t r = 0; r < blockRows; ++r) {
+            const uint32_t row = b * blockRows + r;
+            if (row >= src.rows) {
+                break;
+            }
+            for (uint32_t w = 0; w < src.kwords; ++w) {
+                const uint32_t plus = src.bits[static_cast<size_t>(b) * 2 * src.kwords * blockRows +
+                                               static_cast<size_t>(w) * blockRows + r];
+                const uint32_t minus =
+                    src.bits[static_cast<size_t>(b) * 2 * src.kwords * blockRows +
+                             static_cast<size_t>(src.kwords) * blockRows +
+                             static_cast<size_t>(w) * blockRows + r];
+                for (uint32_t bit = 0; bit < kWeightsPerWord; ++bit) {
+                    const uint32_t col = w * kWeightsPerWord + bit;
+                    if (col >= src.cols) {
+                        break;
+                    }
+                    const int v = static_cast<int>((plus >> bit) & 1U) -
+                                  static_cast<int>((minus >> bit) & 1U);
+                    out[(static_cast<size_t>(row) * src.cols) + col] = static_cast<int8_t>(v);
+                }
+            }
+        }
+    }
+    return out;
+}
+
 PackedActivations PackedActivations::pack(const int8_t* a, uint32_t m, uint32_t k) {
     PackedActivations p;
     p.rows = m;

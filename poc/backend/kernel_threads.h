@@ -45,7 +45,7 @@ inline uint32_t expected_local_size(const std::string& kernel, const GpuProfile&
                                  // (GEMV_*/GEMM_BITPLANE_CELLCOOP_THREADS)
     }
     // Fixed-contract kernels.
-    if (kernel == "gemv_bitplane_ksplit") {
+    if (kernel == "gemv_bitplane_ksplit" || kernel == "gemv_bitplane_ksplit_il") {
         return 256U;
     }
     if (kernel == "gemm_bitplane_ksplit") {

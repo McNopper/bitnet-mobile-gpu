@@ -95,9 +95,10 @@ struct WorkgroupContract {
     uint32_t z;
 };
 
-[[nodiscard]] inline std::array<WorkgroupContract, 11> workgroup_contracts(const GpuProfile& gpu) {
+[[nodiscard]] inline std::array<WorkgroupContract, 12> workgroup_contracts(const GpuProfile& gpu) {
     return {WorkgroupContract{"gemv_bitplane_rowserial", 64U, 1U, 1U},
             WorkgroupContract{"gemv_bitplane_ksplit", 256U, 1U, 1U},
+            WorkgroupContract{"gemv_bitplane_ksplit_il", 256U, 1U, 1U},
             WorkgroupContract{"gemv_bitplane_rowcoop", gpu.gemv_threads, 1U, 1U},
             WorkgroupContract{"gemm_bitplane_cellcoop", gpu.gemv_threads, 1U, 1U},
             WorkgroupContract{"gemm_bitplane_tiled", gpu.gemm_tile_threads, 1U, 1U},
@@ -142,7 +143,7 @@ inline constexpr uint64_t kUncheckedGroups = UINT64_MAX;
     if (champion == "gemv_bitplane_rowserial") {
         return {(n + 63ULL) / 64ULL, 1ULL, 1ULL}; // numthreads(64, 1, 1)
     }
-    if (champion == "gemv_bitplane_ksplit") {
+    if (champion == "gemv_bitplane_ksplit" || champion == "gemv_bitplane_ksplit_il") {
         // numthreads(256, 1, 1) over n; one dispatch layer per 8-word K-slice.
         return {(n + 255ULL) / 256ULL, 1ULL, (plane_words + 7ULL) / 8ULL};
     }

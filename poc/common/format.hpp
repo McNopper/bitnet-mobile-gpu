@@ -83,12 +83,22 @@ struct PackedTernary {
     uint32_t kwords = 0; // ceil(K / 32)
     // Layout: [row][plane(0..1)][word(0..kwords)]  -> size rows * 2 * kwords
     std::vector<uint32_t> bits;
-
     static PackedTernary pack(const int8_t* w, uint32_t n, uint32_t k);
     // Test helper: recover {-1,0,+1} values incl. padding = 0.
     std::vector<int8_t> unpack() const;
     uint64_t bytes() const { return uint64_t(rows) * 2 * kwords * sizeof(uint32_t); }
 };
+
+// Interleaved-16 layout (alternate buffer, not a change to the default
+// contract): blocks of 16 rows; within a block, for each word index w, the
+// 16 rows' plus-plane words are contiguous, then their minus-plane words.
+// Addressing: out[b*(2*kwords*16) + w*16 + r] (plus) and
+//             out[b*(2*kwords*16) + kwords*16 + w*16 + r] (minus),
+// so a workgroup whose threads own consecutive rows reads 16 CONTIGUOUS
+// words per plane per step (coalesced), instead of 16 rows' strided planes.
+PackedTernary repack_interleaved16(const PackedTernary& src);
+// Inverse permutation for the roundtrip unit test (proof it is lossless).
+std::vector<int8_t> unpack_interleaved16(const PackedTernary& src);
 
 struct PackedActivations {
     uint32_t rows = 0;   // M

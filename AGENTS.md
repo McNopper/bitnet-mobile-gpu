@@ -32,7 +32,7 @@ Expect exit 0 with zero warnings. Compiles every Slang kernel to SPIR-V
 build\windows\poc_tests.exe --spv-dir build\windows\spv
 ```
 
-Expect exit 0, `ALL TESTS PASSED`, `caps: 47 checks, 0 violations`,
+Expect exit 0, `ALL TESTS PASSED`, `caps: 50 checks, 0 violations`,
 `validation: ON (0 messages)`. The run covers deterministic synthetic
 shapes, the hand-computed known-answer vector
 ([data/golden_vector.txt](data/golden_vector.txt)), and negative controls
@@ -74,7 +74,7 @@ python tools/export_weights.py
 build\windows\poc_tests.exe --spv-dir build\windows\spv --tensors models\real_weights.bitnet1
 ```
 
-Expect 157 PASS lines instead of 143 (the real-model tests join). The
+Expect 167 PASS lines instead of 153 (the real-model tests join). The
 container regenerates byte-identically from the checkpoint (sha256
 documented in [data/README.md](data/README.md)); model files are
 downloaded or generated, never shipped — see

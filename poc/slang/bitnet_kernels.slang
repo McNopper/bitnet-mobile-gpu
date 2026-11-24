@@ -210,6 +210,47 @@ gemv_bitplane_ksplit(uint3 tid : SV_DispatchThreadID) {
     InterlockedAdd(OutAcc[n], partial);
 }
 
+// ---- gemv_bitplane_ksplit_il: K-split over the INTERLEAVED-16 layout ----
+// Same math and InterlockedAdd accumulation contract as gemv_bitplane_ksplit,
+// but weights are read in the interleaved-16 layout (format.hpp
+// repack_interleaved16): for each word index w, the 16 rows of a block read
+// 16 CONTIGUOUS words per plane, instead of 16 rows' strided planes. On
+// Adreno, where each thread owns a different output row, this is the
+// coalesced form of the same dispatch.
+
+static void planeWordAccumulateIL(uint wBase, uint aBase, uint w, inout int accU, inout int rowSum) {
+    const uint w0 = WeightBits[wBase + w * 16U];
+    const uint w1 = WeightBits[wBase + P.kwords * 16U + w * 16U];
+    for (int p = 0; p < 8; ++p) {
+        const uint act = ActBits[aBase + uint(p) * P.kwords + w];
+        accU += (1 << p) * (int(countbits(w0 & act)) - int(countbits(w1 & act)));
+    }
+    rowSum += int(countbits(w0)) - int(countbits(w1));
+}
+
+[shader("compute")][numthreads(256, 1, 1)] void
+gemv_bitplane_ksplit_il(uint3 tid : SV_DispatchThreadID) {
+    const uint n = tid.x;
+    if (n >= P.n) {
+        return;
+    }
+    const uint block = n / 16U;
+    const uint r = n % 16U;
+    const uint wBase = block * (2U * P.kwords * 16U) + r;
+    const int slice = int(tid.z);
+    const int begin = slice * int(P.mode);
+    const int end = min(begin + int(P.mode), int(P.kwords));
+    if (begin >= end) {
+        return;
+    }
+    int accU = 0;
+    int rowSum = 0;
+    for (int w = begin; w < end; ++w) {
+        planeWordAccumulateIL(wBase, 0U, uint(w), accU, rowSum);
+    }
+    InterlockedAdd(OutAcc[n], accU - 128 * rowSum);
+}
+
 // ---- gemv_bitplane_rowcoop: cooperative rows, one workgroup per row ----
 // (thread t walks words t, t+T, t+2T for cache-line utilization; partials
 // combine in groupshared memory - no atomics, no zero-init contract).

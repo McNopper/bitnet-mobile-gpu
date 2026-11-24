@@ -526,6 +526,20 @@ int64_t compare_tensor(const Shape& s, const bitnet::TernaryTensor& t,
     const ShapeVariants sv = base_variants_for(s, kSliceWords, gpu);
     const auto& [v1, v2, v3, v4] = sv;
 
+    // ksplit_il: the interleaved-16 weight layout (format.hpp
+    // repack_interleaved16) for the coalesced Adreno path. Same dispatch
+    // contract as ksplit, its own repacked weight buffer. GEMV only (the
+    // il kernel reads one activation row, like gemv_bitplane_ksplit);
+    // multi-token shapes keep the gemm variant below.
+    Variant v2il = sv.v2;
+    v2il.name = "gemv_bitplane_ksplit_il";
+    const auto packed_il = bitnet::repack_interleaved16(packed_w);
+    // The interleaved buffer pads rows to a multiple of 16: use the real
+    // bit-vector size, not PackedTernary::bytes() (unpadded rows).
+    const std::size_t il_bytes = packed_il.bits.size() * sizeof(uint32_t);
+    auto wbuf_il = backend->create_buffer(il_bytes, true);
+    std::memcpy(wbuf_il->mapped(), packed_il.bits.data(), il_bytes);
+
     // dot-family kernels: integer dot product is core since Vulkan 1.3
     // (docs.vulkan.org refpage VK_KHR_shader_integer_dot_product). The
     // capability-driven variant (variant_selection.hpp) picks the module:
@@ -591,6 +605,9 @@ int64_t compare_tensor(const Shape& s, const bitnet::TernaryTensor& t,
     };
     for (const Variant& variant : {v1, v2, v3}) {
         run_variant(variant, wbuf.get(), abuf.get());
+    }
+    if (s.m == 1) {
+        run_variant(v2il, wbuf_il.get(), abuf.get()); // il: gemv shapes only
     }
     if (s.m > 1) {
         run_variant(v4, wbuf.get(), abuf.get()); // shared-tile GEMM: gemm-only

@@ -191,10 +191,14 @@ BenchBuffers pack_bench_buffers(bitnet::IComputeBackend& backend, const BenchSha
     } else {
         const auto pw = bitnet::PackedTernary::pack(t.weights.data(), s.n, s.k);
         const auto pa = bitnet::PackedActivations::pack(t.activations.data(), s.m, s.k);
-        out.kwords = pw.kwords;
-        out.wbuf = backend.create_buffer(pw.bytes(), true);
+        // ksplit_il consumes the interleaved-16 layout (format.hpp
+        // repack_interleaved16); everything else keeps the default layout.
+        const auto pwx =
+            (kernel_sv == "gemv_bitplane_ksplit_il") ? bitnet::repack_interleaved16(pw) : pw;
+        out.kwords = pwx.kwords;
+        out.wbuf = backend.create_buffer(pwx.bytes(), true);
         out.abuf = backend.create_buffer(pa.bytes(), true);
-        std::memcpy(out.wbuf->mapped(), pw.bits.data(), pw.bytes());
+        std::memcpy(out.wbuf->mapped(), pwx.bits.data(), pwx.bytes());
         std::memcpy(out.abuf->mapped(), pa.bits.data(), pa.bytes());
     }
     return out;
@@ -408,6 +412,25 @@ uint32_t run_vec_load_probe(bitnet::IComputeBackend& backend) {
                     bad == 0U ? "PASS" : "FAIL", bad, rout0, expect0);
     }
     return bad;
+}
+
+bitnet::BenchStats bench_fma_probe(bitnet::IComputeBackend& backend, uint32_t iters_per_thread,
+                                   uint32_t total_threads, uint32_t iters) {
+    auto sink = backend.create_buffer(static_cast<uint64_t>(total_threads) * sizeof(int32_t), true);
+    auto* kernel =
+        backend.load_kernel({.name = "alu_fma_probe", .numthreads = {kProbeThreads, 1, 1}});
+    const bitnet::KernelParams params{
+        .m = 1U, .n = total_threads, .kwords = iters_per_thread, .mode = 0U};
+    backend.bind(nullptr, sink.get(), nullptr); // fma probe: b1 = Sink, b3 = params
+    backend.set_params(&params, sizeof(params));
+
+    bitnet::IComputeBackend::Dispatch d;
+    d.kernel = kernel;
+    d.groups[0] = total_threads / kProbeThreads;
+
+    backend.dispatch_bench_stats(d, kWarmupIters);
+    backend.wait_idle();
+    return backend.dispatch_bench_stats(d, iters);
 }
 
 bitnet::BenchStats bench_alu_probe(bitnet::IComputeBackend& backend, uint32_t iters_per_thread,
@@ -678,6 +701,12 @@ void run_probes(bitnet::IComputeBackend& backend) {
     const bitnet::BenchStats alu = bench_alu_probe(backend, alu_iters, threads, kProbeIters);
     std::printf("alu_countbits_probe,1,%u,%u,0,%u,%.4f,%.4f,%.4f,0,0.000\n", threads, alu_iters,
                 kProbeIters, alu.avg_ms, alu.min_ms, alu.p90_ms);
+
+    // FP32-FMA formulation of the same ternary arithmetic: one FMA per
+    // weight against the AND + popcount integer pipeline above.
+    const bitnet::BenchStats fma = bench_fma_probe(backend, alu_iters, threads, kProbeIters);
+    std::printf("alu_fma_probe,1,%u,%u,0,%u,%.4f,%.4f,%.4f,0,0.000\n", threads, alu_iters,
+                kProbeIters, fma.avg_ms, fma.min_ms, fma.p90_ms);
 
     // Vector-load isolation: settles uint4 storage-load
     // correctness per driver - the execution probe that property queries

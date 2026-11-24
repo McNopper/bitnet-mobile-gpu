@@ -29,7 +29,7 @@ build\windows\poc_tests.exe --spv-dir build\windows\spv
 build\windows\poc_bench.exe --spv-dir build\windows\spv
 ```
 
-Expected: `ALL TESTS PASSED`, `caps: 47 checks, 0 violations`,
+Expected: `ALL TESTS PASSED`, `caps: 50 checks, 0 violations`,
 `validation: ON (0 messages)` — the last one on the desktop only; the
 validation layer does not load on production Android builds, where the
 integer oracle is the gate.

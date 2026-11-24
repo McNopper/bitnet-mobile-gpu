@@ -56,6 +56,7 @@ struct KernelInfo {
 inline constexpr auto kKernelTable = std::to_array<KernelInfo>({
     {"gemv_bitplane_rowserial", KernelFamily::Bitplane, KernelAssignment::RowSerial, true},
     {"gemv_bitplane_ksplit", KernelFamily::Bitplane, KernelAssignment::KSplit, true},
+    {"gemv_bitplane_ksplit_il", KernelFamily::Bitplane, KernelAssignment::KSplit, true},
     {"gemv_bitplane_rowcoop", KernelFamily::Bitplane, KernelAssignment::RowCoop, true},
     {"gemm_bitplane_naive", KernelFamily::Bitplane, KernelAssignment::Naive, false},
     {"gemm_bitplane_ksplit", KernelFamily::Bitplane, KernelAssignment::KSplit, false},
@@ -73,6 +74,7 @@ inline constexpr auto kKernelTable = std::to_array<KernelInfo>({
     {"null_probe", KernelFamily::Probe, KernelAssignment::Probe, false},
     {"vec_load_probe", KernelFamily::Probe, KernelAssignment::Probe, false},
     {"alu_countbits_probe", KernelFamily::Probe, KernelAssignment::Probe, false},
+    {"alu_fma_probe", KernelFamily::Probe, KernelAssignment::Probe, false},
 });
 
 // name may carry the "_emulated" module suffix (dot_module_name) or a

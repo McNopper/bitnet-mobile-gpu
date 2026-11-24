@@ -64,6 +64,7 @@ endif()
 
 set(BITNET_FIXED_KERNELS
   alu_countbits_probe
+  alu_fma_probe
   bw_probe
   null_probe
   stream_bw_probe
@@ -76,6 +77,7 @@ set(BITNET_FIXED_KERNELS
 set(BITNET_BITPLANE_ENTRIES
   gemv_bitplane_rowserial
   gemv_bitplane_ksplit
+  gemv_bitplane_ksplit_il
   gemv_bitplane_rowcoop
   gemm_bitplane_naive
   gemm_bitplane_ksplit
@@ -204,14 +206,17 @@ endmacro()
 # be legal for EVERY shape of its role, including the 128256-row output
 # head. The three mobile profiles are measured (system-level A/B in two
 # orders, kernel matrix; report section 5.1).
-# - mali-g57: decode gemv_plane_rowcoop (573 ms per token; next candidate
-#   gemv_bitplane_rowcoop 684); prefill gemm_bitplane_naive (fastest
-#   64-token block of the largest layer: 281 ms; gemm_plane_tiled 299).
+# - mali-g57: decode gemv_plane_rowcoop (573 ms per token at rows-per-group
+#   1; next candidate gemv_bitplane_rowcoop 684); prefill
+#   gemm_bitplane_naive (fastest 64-token block of the largest layer:
+#   281 ms; gemm_plane_tiled 299).
+#   gemv6_rows_per_group 8 measured 2026-11-24: 455 ms/token vs 573 at 1
+#   (A/B on the device, -20.5% decode, head 71 vs 94 ms).
 # - rtx5070 / default: gemv_bitplane_rowserial (decode) and
 #   gemm_plane_tiled (prefill). The desktop is the correctness lane; its
 #   champions are not tuned.
 bitnet_compile_kernels_for("default" "" 128 128 128 4 32 8 128 1 4 2 64 "gemv_bitplane_rowserial" "gemm_plane_tiled")
-bitnet_compile_kernels_for("mali-g57" "Mali-G57" 64 16 32 4 64 16 256 1 4 2 64 "gemv_plane_rowcoop" "gemm_bitplane_naive")
+bitnet_compile_kernels_for("mali-g57" "Mali-G57" 64 16 32 4 64 16 256 8 4 2 64 "gemv_plane_rowcoop" "gemm_bitplane_naive")
 bitnet_compile_kernels_for("rtx5070" "NVIDIA GeForce RTX 5070" 128 128 128 4 32 8 128 1 4 2 64 "gemv_bitplane_rowserial" "gemm_plane_tiled")
 # - mali-g52 (Galaxy Tab A8): workgroup limit 384, 32 KiB shared, Vulkan
 #   1.1; the mali-g57 knob set fits its limits. Decode
@@ -219,7 +224,9 @@ bitnet_compile_kernels_for("rtx5070" "NVIDIA GeForce RTX 5070" 128 128 128 4 32 
 #   same champion as on Mali-G57. Prefill gemm_plane_tiled (99 ms for the
 #   64-token block of the largest layer; gemm_bitplane_naive 384) - the
 #   opposite of Mali-G57: the champion is measured per device.
-bitnet_compile_kernels_for("mali-g52" "Mali-G52" 64 16 32 4 64 16 256 1 4 2 64 "gemv_plane_rowcoop" "gemm_plane_tiled")
+#   gemv6_rows_per_group 8 measured 2026-11-24: 151 ms/token vs 222 at 1
+#   (ABBA on the device, -31/-34% in both orders, head 23 vs 35 ms).
+bitnet_compile_kernels_for("mali-g52" "Mali-G52" 64 16 32 4 64 16 256 8 4 2 64 "gemv_plane_rowcoop" "gemm_plane_tiled")
 # - adreno740 (Quest 3): workgroup limit 1024, 32 KiB shared, subgroup
 #   range 64..128; integer dot present, acceleration flags false. The
 #   match string is the EXACT caps device name (gpu_profiles.h.in matches
@@ -227,11 +234,13 @@ bitnet_compile_kernels_for("mali-g52" "Mali-G52" 64 16 32 4 64 16 256 1 4 2 64 "
 #   are the fastest on single layer shapes but dispatch one workgroup per
 #   output row: 128256 groups for the head exceed this device's 65535
 #   workgroup-count limit and the caps gate rejects them. Decode champion
-#   among the legal candidates: gemv_bitplane_ksplit (43.4 ms per token;
-#   gemv_bitplane_rowserial 46.5). Prefill gemm_bitplane_naive (1040 ms
-#   per 64-token block; gemm_plane_tiled 1979; gemm_bitplane_tiled and
+#   among the legal candidates: gemv_bitplane_ksplit_il (23.4 ms per
+#   token, interleaved-16 layout; plain gemv_bitplane_ksplit 43.4) -
+#   ABBA on the device 2026-11-24, -45% decode, head 2.9 vs 7.4 ms.
+#   Prefill gemm_bitplane_naive (1040 ms per 64-token block;
+#   gemm_plane_tiled 1979; gemm_bitplane_tiled and
 #   gemm_dot_tiled lose the device: one submission exceeds about 2 s).
-bitnet_compile_kernels_for("adreno740" "Adreno (TM) 740" 128 128 128 4 32 8 128 1 4 2 64 "gemv_bitplane_ksplit" "gemm_bitplane_naive")
+bitnet_compile_kernels_for("adreno740" "Adreno (TM) 740" 128 128 128 4 32 8 128 1 4 2 64 "gemv_bitplane_ksplit_il" "gemm_bitplane_naive")
 
 # Tuning-sweep profiles (NOT auto-selected; used by bench sweeps via an
 # explicit --spv-dir). Constraint set for Mali-G57: TILE_THREADS = TILE_M *
@@ -345,3 +354,4 @@ endif()
 find_package(Threads REQUIRED)
 add_executable(poc_membw poc/bench/membw_main.cpp)
 target_link_libraries(poc_membw PRIVATE Threads::Threads)
+

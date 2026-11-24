@@ -41,7 +41,7 @@ pwsh scripts/build-windows.ps1
 
 # 2. Test harness: bit-exact GPU against the CPU oracle, sample input and
 #    expected output. Expect "ALL TESTS PASSED", exit 0,
-#    "caps: 47 checks, 0 violations" and "validation: ON (0 messages)".
+#    "caps: 50 checks, 0 violations" and "validation: ON (0 messages)".
 .\build\windows\poc_tests.exe --spv-dir build\windows\spv
 
 # 3. Benchmarks (CSV on stdout): kernel matrix, then the whole-system pass

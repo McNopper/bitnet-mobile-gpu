@@ -21,7 +21,8 @@
 // and the system pass therefore resolve mode and grid through the two
 // helpers below.
 bool is_ksplit_kernel(std::string_view kernel) {
-    return kernel == "gemv_bitplane_ksplit" || kernel == "gemm_bitplane_ksplit";
+    return kernel == "gemv_bitplane_ksplit" || kernel == "gemv_bitplane_ksplit_il" ||
+           kernel == "gemm_bitplane_ksplit";
 }
 
 uint32_t kernel_param_mode(std::string_view kernel, uint32_t packed_mode) {
@@ -68,7 +69,7 @@ std::array<uint32_t, 3> bench_dispatch_groups(std::string_view kernel,
     if (kernel == "gemm_bitplane_cellcoop") {
         return {m * n, 1U, 1U}; // one workgroup per output cell
     }
-    if (kernel == "gemv_bitplane_ksplit") {
+    if (kernel == "gemv_bitplane_ksplit" || kernel == "gemv_bitplane_ksplit_il") {
         return {ceil_div(n, kV2GroupThreads), 1U, ceil_div(kernel_kwords, kKSliceWords)};
     }
     if (kernel == "gemm_bitplane_ksplit") {
@@ -139,8 +140,10 @@ SiteParams pack_site(const bitnet::TernaryTensor& t, uint32_t m, uint32_t n, uin
     } else {
         const auto pw = bitnet::PackedTernary::pack(t.weights.data(), n, k);
         const auto pa = bitnet::PackedActivations::pack(t.activations.data(), m, k);
-        out.kwords = pw.kwords;
-        out.wbits = pw.bits;
+        const auto pwx =
+            (kernel == "gemv_bitplane_ksplit_il") ? bitnet::repack_interleaved16(pw) : pw;
+        out.kwords = pwx.kwords;
+        out.wbits = pwx.bits;
         out.abits = pa.bits;
         out.wbytes = pw.bytes();
         out.abytes = pa.bytes();
